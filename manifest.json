@@ -1,0 +1,11 @@
+{
+    "id": "vaultkeeper",
+    "name": "Vaultkeeper",
+    "version": "1.2.4",
+    "minAppVersion": "0.15.0",
+    "description": "Organize and manage attachments, rename pasted files, and extract text via OCR — all within your Obsidian vault.",
+    "author": "Erin Skidds",
+    "authorUrl": "https://github.com/DudeThatsErin",
+    "fundingUrl": "https://buymeacoffee.com/erinskidds",
+    "isDesktopOnly": false
+}
