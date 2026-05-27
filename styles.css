@@ -93,8 +93,8 @@
     border-radius: 6px;
     font-size: 0.875em;
     font-weight: 500;
-    text-decoration: none !important;
-    color: #fff !important;
+    text-decoration: none;
+    color: #fff;
     transition: filter 0.15s ease, transform 0.1s ease;
 }
 
@@ -105,7 +105,7 @@
 
 .coffee-link {
     background: #e0a800;
-    color: #fff !important;
+    color: #fff;
 }
 
 .github-link {
