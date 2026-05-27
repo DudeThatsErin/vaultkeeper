@@ -16,7 +16,7 @@ const DEFAULT_SETTINGS = {
     // OCR Settings
     ocrEnabled: false,
     ocrApiKey: '',
-    ocrModel: 'gemini-2.0-flash',
+    ocrModel: 'gemini-2.5-flash',
     ocrWatchFolder: 'assets/attachments',
     ocrOutputFolder: 'assets/attachments/ocr',
     ocrAutoProcess: true,
@@ -46,7 +46,7 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
 
         // Settings container
         // Main Settings Section
-        containerEl.createEl('h2', { text: 'Attachment Organizer Settings' });
+        containerEl.createEl('h2', { text: 'VaultKeeper Settings' });
 
          // Support & Links Section
          this.createAccordionSection(containerEl, 'Support & Links', (el) => {
@@ -186,10 +186,11 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
 
         // Paste Rename Settings
         this.createAccordionSection(containerEl, 'Paste Rename Settings', (el) => {
-            el.createEl('p', {
+            const pasteDesc = el.createEl('p', {
                 text: 'Automatically rename files when they are pasted or dropped into Obsidian.',
                 cls: 'setting-item-description'
             });
+            pasteDesc.className = 'ocr-description';
 
             new Setting(el)
                 .setName('Rename mode')
@@ -290,11 +291,13 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                     .setName('Gemini model')
                     .setDesc('The Gemini model to use for OCR')
                     .addDropdown(drop => drop
-                        .addOption('gemini-2.0-flash', 'Gemini 2.0 Flash (Fastest, Recommended)')
-                        .addOption('gemini-2.0-flash-lite', 'Gemini 2.0 Flash-Lite (Free tier)')
-                        .addOption('gemini-1.5-flash', 'Gemini 1.5 Flash')
-                        .addOption('gemini-1.5-pro', 'Gemini 1.5 Pro')
-                        .addOption('gemini-2.5-pro-exp-03-25', 'Gemini 2.5 Pro (Experimental)')
+                        .addOption('gemini-2.5-flash', 'Gemini 2.5 Flash (Recommended)')
+                        .addOption('gemini-2.5-flash-lite', 'Gemini 2.5 Flash-Lite (Fastest, Free tier)')
+                        .addOption('gemini-2.5-pro', 'Gemini 2.5 Pro (Most capable)')
+                        .addOption('gemini-3.5-flash', 'Gemini 3.5 Flash (Most intelligent)')
+                        .addOption('gemini-3.1-flash-lite', 'Gemini 3.1 Flash-Lite (Budget)')
+                        .addOption('gemini-1.5-flash', 'Gemini 1.5 Flash (Legacy)')
+                        .addOption('gemini-1.5-pro', 'Gemini 1.5 Pro (Legacy)')
                         .setValue(this.plugin.settings.ocrModel)
                         .onChange(async (value) => {
                             this.plugin.settings.ocrModel = value;
