@@ -1,8 +1,6 @@
 # Vaultkeeper for Obsidian
 
-> *Note 1:* This plugin is being vibe coded. So, if you are not wanting AI code in your vault, please do not use this plugin. Though I am a full time Full Stack Developer so I can validate none of the code is leaking secrets or collecting personal data if that helps you.
-
-> *Note 2:* I am making this plugin for myself. While I accept feature requests, I may not complete them as this plugin is for me, I offer it to anyone in case your brain works like mine. I do not guarantee any support or updates.
+> *Note:* This plugin is being vibe coded. So, if you are not wanting AI code in your vault, please do not use this plugin. Though I am a full time Full Stack Developer so I can validate none of the code is leaking secrets or collecting personal data if that helps you.
 
 A comprehensive Obsidian plugin that organizes and manages attachments, renames pasted files automatically, and extracts text from images and PDFs using OCR — all within your vault.
 
