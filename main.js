@@ -46,8 +46,6 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
 
         // Settings container
         // Main Settings Section
-        containerEl.createEl('h2', { text: 'VaultKeeper Settings' });
-
          // Support & Links Section
          this.createAccordionSection(containerEl, 'Support & Links', (el) => {
             const supportContainer = el.createDiv();
@@ -78,12 +76,12 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
             discordBtn.className = 'support-link discord-link';
         });
 
-        // General Settings
-        this.createAccordionSection(containerEl, 'General Settings', (el) => {
+        // General
+        this.createAccordionSection(containerEl, 'General', (el) => {
             new Setting(el)
                 .setName('Attachment extensions')
-                .setDesc('Comma-separated list of file extensions treated as attachments')
-                .addTextArea(text => text
+                .setDesc('Comma-separated file extensions treated as attachments')
+                .addText(text => text
                     .setPlaceholder('png,jpg,jpeg,...')
                     .setValue(this.plugin.settings.attachmentExtensions)
                     .onChange(async (value) => {
@@ -93,8 +91,8 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
 
             new Setting(el)
                 .setName('Ignore folders')
-                .setDesc('Comma-separated list of folder paths to skip when organizing or purging')
-                .addTextArea(text => text
+                .setDesc('Comma-separated folder paths to skip when organizing or purging')
+                .addText(text => text
                     .setPlaceholder('folder1,folder2/subfolder')
                     .setValue(this.plugin.settings.ignoreFolders)
                     .onChange(async (value) => {
@@ -103,11 +101,11 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                     }));
         });
 
-        // Organization Settings
-        this.createAccordionSection(containerEl, 'Organization Settings', (el) => {
+        // Organization
+        this.createAccordionSection(containerEl, 'Organization', (el) => {
             new Setting(el)
                 .setName('Destination')
-                .setDesc('Where to move attachments: follow Obsidian\'s built-in attachment folder setting, or always prompt for a specific folder name.')
+                .setDesc('Where to move attachments when organizing')
                 .addDropdown(drop => drop
                     .addOption('obsidian-settings', 'Use Obsidian settings')
                     .addOption('same-location', 'Same location as file')
@@ -122,7 +120,7 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
             if (this.plugin.settings.organizationMode === 'separate-folder') {
                 new Setting(el)
                     .setName('Default folder name')
-                    .setDesc('Pre-filled name shown in the prompt each time you organize. You can change it per-run.')
+                    .setDesc('Pre-filled folder name shown in the organize prompt')
                     .addText(text => text
                         .setPlaceholder('attachments')
                         .setValue(this.plugin.settings.separateFolderName)
@@ -134,7 +132,7 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
 
             new Setting(el)
                 .setName('Sort into subfolders by')
-                .setDesc('Optionally sort attachments into subfolders inside the destination')
+                .setDesc('Sort attachments into subfolders inside the destination')
                 .addDropdown(drop => drop
                     .addOption('none', 'No subfolders')
                     .addOption('date', 'Date (year/month)')
@@ -172,7 +170,7 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
 
             new Setting(el)
                 .setName('Auto-organize interval (minutes)')
-                .setDesc('Re-organize on a schedule. Set to 0 to disable.')
+                .setDesc('Re-organize on a schedule. 0 = disabled.')
                 .addSlider(slider => slider
                     .setLimits(0, 120, 5)
                     .setValue(this.plugin.settings.organizeInterval)
@@ -184,14 +182,8 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                     }));
         });
 
-        // Paste Rename Settings
-        this.createAccordionSection(containerEl, 'Paste Rename Settings', (el) => {
-            const pasteDesc = el.createEl('p', {
-                text: 'Automatically rename files when they are pasted or dropped into Obsidian.',
-                cls: 'setting-item-description'
-            });
-            pasteDesc.className = 'ocr-description';
-
+        // Paste rename
+        this.createAccordionSection(containerEl, 'Paste rename', (el) => {
             new Setting(el)
                 .setName('Rename mode')
                 .setDesc('How to rename attachments when pasted or dropped into a note')
@@ -235,11 +227,11 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
             }
         });
 
-        // Purge Settings
-        this.createAccordionSection(containerEl, 'Purge Settings', (el) => {
+        // Purge
+        this.createAccordionSection(containerEl, 'Purge', (el) => {
             new Setting(el)
                 .setName('Confirm before purging')
-                .setDesc('Show a confirmation prompt before deleting unlinked attachments')
+                .setDesc('Show a confirmation prompt before deleting unlinked attachments.')
                 .addToggle(toggle => toggle
                     .setValue(this.plugin.settings.confirmPurge)
                     .onChange(async (value) => {
@@ -249,17 +241,11 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                     }));
         });
 
-        // OCR Settings
-        this.createAccordionSection(containerEl, 'OCR Settings', (el) => {
-            const ocrDesc = el.createEl('p', { 
-                text: 'Automatically extract text from images and PDFs using Google Gemini AI',
-                cls: 'setting-item-description'
-            });
-            ocrDesc.className = 'ocr-description';
-
+        // OCR
+        this.createAccordionSection(containerEl, 'OCR', (el) => {
             new Setting(el)
                 .setName('Enable OCR')
-                .setDesc('Enable automatic OCR processing of images and PDFs')
+                .setDesc('Extract text from images and PDFs using Google Gemini AI')
                 .addToggle(toggle => toggle
                     .setValue(this.plugin.settings.ocrEnabled)
                     .onChange(async (value) => {
@@ -270,10 +256,10 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
 
             if (this.plugin.settings.ocrEnabled) {
                 new Setting(el)
-                    .setName('OCR API key')
+                    .setName('Gemini API key')
                     .then(setting => {
                         const frag = document.createDocumentFragment();
-                        frag.appendText('Get your API key from ');
+                        frag.appendText('Get your key from ');
                         const link = frag.createEl('a', { text: 'Google AI Studio', href: 'https://makersuite.google.com/app/apikey' });
                         link.setAttr('target', '_blank');
                         link.setAttr('rel', 'noopener noreferrer');
@@ -330,10 +316,10 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
 
         // OCR Processing Settings
         if (this.plugin.settings.ocrEnabled) {
-            this.createAccordionSection(containerEl, 'OCR processing settings', (el) => {
+            this.createAccordionSection(containerEl, 'OCR processing', (el) => {
                 new Setting(el)
                     .setName('Batch size')
-                    .setDesc('Number of files to process in each batch (1 recommended for free tier)')
+                    .setDesc('Files processed per batch. 1 is recommended for the free tier.')
                     .addSlider(slider => slider
                         .setLimits(1, 5, 1)
                         .setValue(this.plugin.settings.ocrBatchSize)
@@ -345,7 +331,7 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
 
                 new Setting(el)
                     .setName('Max file size (MB)')
-                    .setDesc('Maximum file size to process (larger files will be skipped)')
+                    .setDesc('Files larger than this will be skipped')
                     .addSlider(slider => slider
                         .setLimits(1, 50, 1)
                         .setValue(this.plugin.settings.ocrMaxFileSize / 1024 / 1024)
@@ -357,7 +343,7 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
 
                 new Setting(el)
                     .setName('Force reprocess')
-                    .setDesc('Always reprocess files even if OCR already exists (useful for testing)')
+                    .setDesc('Reprocess files even when OCR output already exists')
                     .addToggle(toggle => toggle
                         .setValue(this.plugin.settings.ocrForceReprocess)
                         .onChange(async (value) => {
@@ -367,7 +353,7 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
 
                 new Setting(el)
                     .setName('Auto-process new files')
-                    .setDesc('Automatically OCR new images and PDFs added to the watch folder')
+                    .setDesc('OCR new images and PDFs added to the watch folder')
                     .addToggle(toggle => toggle
                         .setValue(this.plugin.settings.ocrAutoProcessNewFiles)
                         .onChange(async (value) => {
@@ -377,7 +363,7 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
 
                 new Setting(el)
                     .setName('Auto-process modified files')
-                    .setDesc('Automatically OCR files when they are modified or updated')
+                    .setDesc('OCR files again when they are modified')
                     .addToggle(toggle => toggle
                         .setValue(this.plugin.settings.ocrAutoProcessModifiedFiles)
                         .onChange(async (value) => {
@@ -387,7 +373,7 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
 
                 new Setting(el)
                     .setName('OCR processed field')
-                    .setDesc('YAML frontmatter field name to mark files as processed')
+                    .setDesc('Frontmatter field used to mark files as already processed')
                     .addText(text => text
                         .setPlaceholder('ocr-processed')
                         .setValue(this.plugin.settings.ocrProcessedField)
@@ -401,7 +387,7 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
             this.createAccordionSection(containerEl, 'OCR templates', (el) => {
                 const ocrPromptSetting = new Setting(el)
                     .setName('OCR prompt')
-                    .setDesc('Custom prompt to send to Gemini for OCR processing')
+                    .setDesc('Prompt sent to Gemini when processing each file')
                     .setClass('setting-item-heading');
                 
                 ocrPromptSetting.settingEl.style.display = 'block';
@@ -417,7 +403,7 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
 
                 const ocrTemplateSetting = new Setting(el)
                     .setName('OCR output template')
-                    .setDesc('Template for OCR output notes. Available variables: {{filename}}, {{date}}, {{status}}, {{content}}')
+                    .setDesc('Template for OCR output notes. Variables: {{filename}}, {{date}}, {{status}}, {{content}}')
                     .setClass('setting-item-heading');
                 
                 ocrTemplateSetting.settingEl.style.display = 'block';
