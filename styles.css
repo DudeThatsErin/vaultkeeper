@@ -68,6 +68,21 @@
     border-top: none;
 }
 
+/* Collapsible native group headings */
+.setting-group-heading[data-vk-collapsible] {
+    cursor: pointer;
+    user-select: none;
+}
+
+.setting-group-heading[data-vk-collapsible]:hover {
+    color: var(--text-accent);
+}
+
+.vk-group-arrow {
+    color: var(--text-muted);
+    font-size: 0.8em;
+}
+
 /* OCR description paragraph inside accordion */
 .ocr-description {
     padding: 12px 18px;
@@ -77,47 +92,59 @@
     border-bottom: 1px solid var(--background-modifier-border);
 }
 
-/* Support links container */
+/* Support links */
 .support-container {
     display: flex;
+    gap: 8px;
     flex-wrap: wrap;
-    gap: 10px;
-    padding: 14px 18px;
+    padding: 4px 0;
 }
 
 .support-link {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 7px 14px;
+    gap: 4px;
+    padding: 6px 14px;
     border-radius: 6px;
-    font-size: 0.875em;
-    font-weight: 500;
     text-decoration: none;
-    color: #fff;
-    transition: filter 0.15s ease, transform 0.1s ease;
+    font-size: var(--font-ui-small);
+    font-weight: 500;
+    transition: background-color 0.15s ease;
+    white-space: nowrap;
 }
 
 .support-link:hover {
-    filter: brightness(1.15);
-    transform: translateY(-1px);
+    text-decoration: none;
 }
 
 .coffee-link {
-    background: #e0a800;
-    color: #fff;
+    background: #FFDD00;
+    color: #000;
 }
+.coffee-link:hover { background: #e6c800; color: #000; }
 
 .github-link {
-    background: #238636;
+    background: #24292e;
+    color: #fff;
 }
+.github-link:hover { background: #3a4149; color: #fff; }
 
 .issues-link {
-    background: #da3633;
+    background: #d73a49;
+    color: #fff;
 }
+.issues-link:hover { background: #b02a37; color: #fff; }
 
 .discord-link {
     background: #5865F2;
+    color: #fff;
+}
+.discord-link:hover { background: #4752c4; color: #fff; }
+
+.setting-item:has(.support-link) {
+    border: none;
+    padding-top: 4px;
+    padding-bottom: 4px;
 }
 
 /* Modal styling for better mobile support */
