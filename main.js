@@ -1,6 +1,6 @@
 // === Attachment Organizer Plugin ===
 
-const { Plugin, Notice, Modal, Setting, PluginSettingTab, TFile, TFolder, MarkdownView } = require('obsidian');
+const { Plugin, Notice, Modal, Setting, PluginSettingTab, TFile, TFolder, MarkdownView, SecretComponent } = require('obsidian');
 
 const DEFAULT_SETTINGS = {
     attachmentFolder: 'attachments',
@@ -15,7 +15,7 @@ const DEFAULT_SETTINGS = {
     separateFolderName: 'attachments',
     // OCR Settings
     ocrEnabled: false,
-    ocrApiKey: '',
+    ocrApiKeyName: '',  // name of the secret in Obsidian SecretStorage (not the key itself)
     ocrModel: 'gemini-2.5-flash',
     ocrWatchFolder: 'assets/attachments',
     ocrOutputFolder: 'assets/attachments/ocr',
@@ -259,17 +259,16 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                     .setName('Gemini API key')
                     .then(setting => {
                         const frag = document.createDocumentFragment();
-                        frag.appendText('Get your key from ');
+                        frag.appendText('Select a saved secret, or create one with your key from ');
                         const link = frag.createEl('a', { text: 'Google AI Studio', href: 'https://makersuite.google.com/app/apikey' });
                         link.setAttr('target', '_blank');
                         link.setAttr('rel', 'noopener noreferrer');
                         setting.setDesc(frag);
                     })
-                    .addText(text => text
-                        .setPlaceholder('AIza...')
-                        .setValue(this.plugin.settings.ocrApiKey)
+                    .addComponent(el => new SecretComponent(this.app, el)
+                        .setValue(this.plugin.settings.ocrApiKeyName)
                         .onChange(async (value) => {
-                            this.plugin.settings.ocrApiKey = value.trim();
+                            this.plugin.settings.ocrApiKeyName = value;
                             await this.plugin.saveSettings();
                         }));
 
@@ -418,6 +417,276 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                 });
             });
         }
+    }
+
+    getSettingDefinitions() {
+        const s = this.plugin.settings;
+        const save = () => this.plugin.saveSettings();
+
+        const defs = [
+            // General
+            {
+                name: 'Attachment extensions',
+                desc: 'Comma-separated file extensions treated as attachments',
+                control: { type: 'text', key: 'attachmentExtensions', placeholder: 'png,jpg,jpeg,...' }
+            },
+            {
+                name: 'Ignore folders',
+                desc: 'Comma-separated folder paths to skip when organizing or purging',
+                control: { type: 'text', key: 'ignoreFolders', placeholder: 'folder1,folder2/subfolder' }
+            },
+            // Organization
+            {
+                name: 'Destination',
+                desc: 'Where to move attachments when organizing',
+                control: {
+                    type: 'dropdown', key: 'organizationMode',
+                    options: {
+                        'obsidian-settings': 'Use Obsidian settings',
+                        'same-location': 'Same location as file',
+                        'separate-folder': 'Separate folder'
+                    }
+                }
+            },
+            {
+                name: 'Default folder name',
+                desc: 'Pre-filled folder name shown in the organize prompt',
+                aliases: ['separate folder'],
+                visible: () => s.organizationMode === 'separate-folder',
+                control: { type: 'text', key: 'separateFolderName', placeholder: 'attachments' }
+            },
+            {
+                name: 'Sort into subfolders by',
+                desc: 'Sort attachments into subfolders inside the destination',
+                control: {
+                    type: 'dropdown', key: 'autoOrganizeMode',
+                    options: {
+                        'none': 'No subfolders',
+                        'date': 'Date (year/month)',
+                        'type': 'File type (extension)',
+                        'custom': 'Custom pattern'
+                    }
+                }
+            },
+            {
+                name: 'Custom subfolder pattern',
+                desc: 'Available tokens: {{year}}, {{month}}, {{day}}, {{type}}, {{filename}}',
+                aliases: ['organize pattern', 'subfolder template'],
+                visible: () => s.autoOrganizeMode === 'custom',
+                control: { type: 'text', key: 'customPattern', placeholder: '{{type}}/{{year}}-{{month}}' }
+            },
+            {
+                name: 'Organize on startup',
+                desc: 'Automatically organize attachments each time Obsidian starts',
+                control: { type: 'toggle', key: 'organizeOnLoad' }
+            },
+            {
+                name: 'Auto-organize interval (minutes)',
+                desc: 'Re-organize on a schedule. 0 = disabled.',
+                aliases: ['schedule', 'automatic organize'],
+                control: { type: 'slider', key: 'organizeInterval', min: 0, max: 120, step: 5 }
+            },
+            // Paste rename
+            {
+                name: 'Paste rename mode',
+                desc: 'How to rename attachments when pasted or dropped into a note',
+                aliases: ['paste', 'drop', 'rename pasted files'],
+                control: {
+                    type: 'dropdown', key: 'pasteRenameMode',
+                    options: {
+                        'none': 'Do not rename',
+                        'date': 'Date-based (automatic)',
+                        'custom': 'Custom pattern (automatic)',
+                        'ask': 'Ask each time',
+                        'date-ask': 'Date-based + ask to confirm'
+                    }
+                }
+            },
+            {
+                name: 'Date format pattern',
+                desc: 'Tokens: {{year}}, {{month}}, {{day}}, {{time}}, {{type}}, {{filename}}, {{original}}',
+                aliases: ['paste rename date format'],
+                visible: () => s.pasteRenameMode === 'date' || s.pasteRenameMode === 'date-ask',
+                control: { type: 'text', key: 'pasteRenameDateFormat', placeholder: '{{year}}-{{month}}-{{day}}' }
+            },
+            {
+                name: 'Custom rename pattern',
+                desc: 'Tokens: {{year}}, {{month}}, {{day}}, {{time}}, {{type}}, {{filename}}, {{original}}',
+                aliases: ['paste rename custom pattern'],
+                visible: () => s.pasteRenameMode === 'custom',
+                control: { type: 'text', key: 'pasteRenameCustomPattern', placeholder: '{{year}}-{{month}}-{{day}}_{{filename}}' }
+            },
+            // Purge
+            {
+                name: 'Confirm before purging',
+                desc: 'Show a confirmation prompt before deleting unlinked attachments',
+                aliases: ['purge confirm', 'delete unlinked'],
+                control: { type: 'toggle', key: 'confirmPurge' }
+            },
+            // OCR
+            {
+                name: 'Enable OCR',
+                desc: 'Extract text from images and PDFs using Google Gemini AI',
+                aliases: ['optical character recognition', 'gemini', 'image text'],
+                control: { type: 'toggle', key: 'ocrEnabled' }
+            },
+            {
+                name: 'Gemini API key',
+                desc: 'Select a saved secret, or create one with your key from Google AI Studio',
+                aliases: ['ocr api key', 'gemini key', 'google ai'],
+                visible: () => s.ocrEnabled,
+                render: (setting) => {
+                    const frag = document.createDocumentFragment();
+                    frag.appendText('Select a saved secret, or create one with your key from ');
+                    const link = frag.createEl('a', { text: 'Google AI Studio', href: 'https://makersuite.google.com/app/apikey' });
+                    link.setAttr('target', '_blank');
+                    link.setAttr('rel', 'noopener noreferrer');
+                    setting.setName('Gemini API key').setDesc(frag)
+                        .addComponent(el => new SecretComponent(this.app, el)
+                            .setValue(s.ocrApiKeyName)
+                            .onChange(async (value) => {
+                                s.ocrApiKeyName = value;
+                                await save();
+                            }));
+                }
+            },
+            {
+                name: 'Gemini model',
+                desc: 'The Gemini model to use for OCR',
+                aliases: ['ocr model', 'gemini 2.5', 'gemini flash'],
+                visible: () => s.ocrEnabled,
+                control: {
+                    type: 'dropdown', key: 'ocrModel',
+                    options: {
+                        'gemini-2.5-flash': 'Gemini 2.5 Flash (Recommended)',
+                        'gemini-2.5-flash-lite': 'Gemini 2.5 Flash-Lite (Fastest, Free tier)',
+                        'gemini-2.5-pro': 'Gemini 2.5 Pro (Most capable)',
+                        'gemini-3.5-flash': 'Gemini 3.5 Flash (Most intelligent)',
+                        'gemini-3.1-flash-lite': 'Gemini 3.1 Flash-Lite (Budget)',
+                        'gemini-1.5-flash': 'Gemini 1.5 Flash (Legacy)',
+                        'gemini-1.5-pro': 'Gemini 1.5 Pro (Legacy)'
+                    }
+                }
+            },
+            {
+                name: 'OCR watch folder',
+                desc: 'Folder to monitor for images and PDFs to OCR',
+                aliases: ['ocr folder', 'watch folder'],
+                visible: () => s.ocrEnabled,
+                control: { type: 'text', key: 'ocrWatchFolder', placeholder: 'assets/attachments' }
+            },
+            {
+                name: 'OCR output folder',
+                desc: 'Where to save OCR notes (leave empty to use same folder as source)',
+                aliases: ['ocr output', 'ocr notes folder'],
+                visible: () => s.ocrEnabled,
+                control: { type: 'text', key: 'ocrOutputFolder', placeholder: 'assets/attachments/ocr' }
+            },
+            {
+                name: 'Batch size',
+                desc: 'Files processed per batch. 1 is recommended for the free tier.',
+                aliases: ['ocr batch', 'ocr processing batch'],
+                visible: () => s.ocrEnabled,
+                control: { type: 'slider', key: 'ocrBatchSize', min: 1, max: 5, step: 1 }
+            },
+            {
+                name: 'Max file size (MB)',
+                desc: 'Files larger than this will be skipped by OCR',
+                aliases: ['ocr max size', 'ocr file size limit'],
+                visible: () => s.ocrEnabled,
+                render: (setting) => {
+                    setting.setName('Max file size (MB)').setDesc('Files larger than this will be skipped by OCR')
+                        .addSlider(slider => slider
+                            .setLimits(1, 50, 1)
+                            .setValue(s.ocrMaxFileSize / 1024 / 1024)
+                            .setDynamicTooltip()
+                            .onChange(async (value) => {
+                                s.ocrMaxFileSize = value * 1024 * 1024;
+                                await save();
+                            }));
+                }
+            },
+            {
+                name: 'Force reprocess',
+                desc: 'Reprocess files even when OCR output already exists',
+                aliases: ['ocr force', 'reprocess ocr'],
+                visible: () => s.ocrEnabled,
+                control: { type: 'toggle', key: 'ocrForceReprocess' }
+            },
+            {
+                name: 'Auto-process new files',
+                desc: 'OCR new images and PDFs added to the watch folder',
+                aliases: ['ocr auto new', 'automatic ocr'],
+                visible: () => s.ocrEnabled,
+                control: { type: 'toggle', key: 'ocrAutoProcessNewFiles' }
+            },
+            {
+                name: 'Auto-process modified files',
+                desc: 'OCR files again when they are modified',
+                aliases: ['ocr auto modified'],
+                visible: () => s.ocrEnabled,
+                control: { type: 'toggle', key: 'ocrAutoProcessModifiedFiles' }
+            },
+            {
+                name: 'OCR processed field',
+                desc: 'Frontmatter field used to mark files as already processed',
+                aliases: ['ocr frontmatter', 'ocr field'],
+                visible: () => s.ocrEnabled,
+                control: { type: 'text', key: 'ocrProcessedField', placeholder: 'ocr-processed' }
+            },
+            {
+                name: 'OCR prompt',
+                desc: 'Prompt sent to Gemini when processing each file',
+                aliases: ['gemini prompt', 'ocr instruction'],
+                visible: () => s.ocrEnabled,
+                render: (setting) => {
+                    setting.setName('OCR prompt').setDesc('Prompt sent to Gemini when processing each file')
+                        .setClass('setting-item-heading');
+                    setting.settingEl.style.display = 'block';
+                    const ta = setting.settingEl.createEl('textarea');
+                    ta.placeholder = 'Extract all text from this image/document...';
+                    ta.value = s.ocrPrompt;
+                    ta.rows = 8;
+                    ta.className = 'ocr-template-textarea';
+                    ta.addEventListener('input', async (e) => {
+                        s.ocrPrompt = e.target.value;
+                        await save();
+                    });
+                }
+            },
+            {
+                name: 'OCR output template',
+                desc: 'Template for OCR output notes. Variables: {{filename}}, {{date}}, {{status}}, {{content}}',
+                aliases: ['ocr template', 'ocr note template'],
+                visible: () => s.ocrEnabled,
+                render: (setting) => {
+                    setting.setName('OCR output template')
+                        .setDesc('Template for OCR output notes. Variables: {{filename}}, {{date}}, {{status}}, {{content}}')
+                        .setClass('setting-item-heading');
+                    setting.settingEl.style.display = 'block';
+                    const ta = setting.settingEl.createEl('textarea');
+                    ta.placeholder = '# OCR Result for {{filename}}...';
+                    ta.value = s.ocrTemplate;
+                    ta.rows = 10;
+                    ta.className = 'ocr-template-textarea';
+                    ta.addEventListener('input', async (e) => {
+                        s.ocrTemplate = e.target.value;
+                        await save();
+                    });
+                }
+            }
+        ];
+
+        return defs;
+    }
+
+    getControlValue(key) {
+        return this.plugin.settings[key];
+    }
+
+    setControlValue(key, value) {
+        this.plugin.settings[key] = value;
+        return this.plugin.saveSettings();
     }
 
     createAccordionSection(containerEl, title, contentCallback) {
@@ -1151,7 +1420,7 @@ module.exports = class AttachmentOrganizer extends Plugin {
     }
 
     async ocrPickAttachment() {
-        if (!this.settings.ocrEnabled || !this.settings.ocrApiKey) {
+        if (!this.settings.ocrEnabled || !this.settings.ocrApiKeyName) {
             new Notice('OCR is not enabled or API key is missing. Check settings.');
             return;
         }
@@ -1321,12 +1590,14 @@ module.exports = class AttachmentOrganizer extends Plugin {
     }
 
     async callGeminiOCR(fileBuffer, mimeType, retryCount = 0) {
-        const apiKey = this.settings.ocrApiKey;
+        const apiKey = this.settings.ocrApiKeyName
+            ? await this.app.secretStorage.get(this.settings.ocrApiKeyName)
+            : null;
         const model = this.settings.ocrModel;
         const prompt = this.settings.ocrPrompt || 'Extract all text from this image/document. Provide the text content clearly and accurately.';
         
         if (!apiKey) {
-            throw new Error('Gemini API key not configured');
+            throw new Error('Gemini API key not configured. Set a secret in OCR Settings.');
         }
 
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
