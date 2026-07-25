@@ -1355,7 +1355,7 @@ module.exports = class AttachmentOrganizer extends Plugin {
             if (!cfgPath || cfgPath.startsWith('./') || cfgPath.startsWith('../')) {
                 // Relative to note location — we can't know which note owns this
                 // attachment, so keep the file in its current folder as the base.
-                baseFolder = file.parent?.path || '';
+                baseFolder = this.stripOrganizedSuffix(file.parent?.path || '');
             } else {
                 baseFolder = cfgPath;
             }
@@ -1374,7 +1374,7 @@ module.exports = class AttachmentOrganizer extends Plugin {
                     }
                 }
             }
-            baseFolder = linkingNoteFolder ?? file.parent?.path ?? '';
+            baseFolder = linkingNoteFolder ?? this.stripOrganizedSuffix(file.parent?.path ?? '');
         } else {
             // separate-folder: use the resolved (prompted) folder name
             baseFolder = resolvedFolderName || this.settings.separateFolderName || 'attachments';
@@ -1422,8 +1422,59 @@ module.exports = class AttachmentOrganizer extends Plugin {
         if (baseFolder && currentFolder.endsWith('/' + baseFolder)) {
             return file.path;
         }
+        // Never re-nest: if the current folder already matches the organized
+        // layout and the target would push the file deeper inside its own
+        // folder, it's already organized (e.g. the "linking note" found is an
+        // OCR note living inside the organized folder).
+        if (baseFolder.startsWith(currentFolder + '/')) {
+            const suffixSrc = this.getOrganizedSuffixRegexSource();
+            if (suffixSrc && new RegExp(`(?:^|/)${suffixSrc}$`).test(currentFolder)) {
+                return file.path;
+            }
+        }
 
         return newPath;
+    }
+
+    // Regex source matching the subfolder layout the current settings would
+    // generate, with date/type/filename tokens widened to wildcards so it
+    // matches regardless of when a file was organized. Null when no
+    // subfolder sorting is configured.
+    getOrganizedSuffixRegexSource() {
+        const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const mode = this.settings.autoOrganizeMode;
+        if (mode === 'date') {
+            return '\\d{4}/\\d{2}';
+        }
+        if (mode === 'type') {
+            const exts = this.settings.attachmentExtensions
+                .split(',').map(e => e.trim().toLowerCase()).filter(Boolean).map(escape);
+            return `(?:${['unknown', ...exts].join('|')})`;
+        }
+        if (mode === 'custom' && this.settings.customPattern) {
+            return escape(this.settings.customPattern)
+                .replace(/\\\{\\\{year\\\}\\\}/g, '\\d{4}')
+                .replace(/\\\{\\\{month\\\}\\\}/g, '\\d{2}')
+                .replace(/\\\{\\\{day\\\}\\\}/g, '\\d{2}')
+                .replace(/\\\{\\\{type\\\}\\\}/g, '[^/]+')
+                .replace(/\\\{\\\{filename\\\}\\\}/g, '[^/]+');
+        }
+        return null;
+    }
+
+    // Remove trailing organized-subfolder segments from a folder path so the
+    // pattern is applied to the file's true base folder. Without this, using
+    // the file's own folder as the base re-appends the pattern on every run
+    // and nests it forever (e.g. Games/[attachments]/2026/05/[attachments]/2026/05).
+    stripOrganizedSuffix(folderPath) {
+        const suffixSrc = this.getOrganizedSuffixRegexSource();
+        if (!suffixSrc || !folderPath) return folderPath;
+        const re = new RegExp(`(?:^|/)${suffixSrc}$`);
+        let stripped = folderPath;
+        while (re.test(stripped)) {
+            stripped = stripped.replace(re, '');
+        }
+        return stripped;
     }
 
     async findUnlinkedAttachments() {
@@ -1629,7 +1680,9 @@ module.exports = class AttachmentOrganizer extends Plugin {
                 base = this.app.vault.config?.attachmentFolderPath || '';
             }
         } else if (mode === 'same-location') {
-            base = sourceFile.parent?.path || '';
+            // The source attachment may already sit inside the organized
+            // layout — strip it so the pattern isn't applied twice.
+            base = this.stripOrganizedSuffix(sourceFile.parent?.path || '');
         } else {
             // separate-folder: use saved default (no prompt for OCR auto-runs)
             base = this.settings.separateFolderName || 'attachments';
