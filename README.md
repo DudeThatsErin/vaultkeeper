@@ -25,8 +25,11 @@ A comprehensive Obsidian plugin that organizes and manages attachments, renames 
 - **Purge Unlinked Attachments**: Safely delete unlinked attachments — select all, none, or individual files via checkboxes, then confirm before anything is deleted
 
 ### 🔍 OCR (Optical Character Recognition)
-- Powered by **Google Gemini AI**
+- **Four providers**: a custom/self-hosted OpenAI-compatible server (Ollama, LM Studio, vLLM, llama.cpp, LiteLLM), OpenAI, Anthropic, or Google Gemini
 - Extract text from images (PNG, JPG, JPEG, WEBP, BMP, GIF, HEIC, HEIF) and PDFs
+- **Progress notice** stays on screen with an elapsed-time counter until the run finishes — self-hosted models can take minutes
+- Watch and output folders can follow Obsidian's attachment setting or Vaultkeeper's own organize destination
+- **Custom note properties**: define whatever YAML frontmatter you want on OCR notes
 - Auto-process new files added to a watch folder
 - Auto-update OCR notes when source files are modified
 - Process files in batches with rate-limit handling and exponential backoff
@@ -78,11 +81,27 @@ A comprehensive Obsidian plugin that organizes and manages attachments, renames 
 ### 🔍 Using OCR
 
 #### Setup
-1. Open **Settings > Attachment Organizer > OCR Settings**
+1. Open **Settings > Vaultkeeper > OCR**
 2. Toggle **Enable OCR** on
-3. Paste your [Google AI Studio API key](https://makersuite.google.com/app/apikey)
-4. Set the **OCR watch folder** (folder to monitor for new files)
-5. Set the **OCR output folder** (where extracted-text notes are saved)
+3. Pick an **OCR provider** and configure it:
+   - *Custom / self-hosted* — set the base URL of any OpenAI-compatible server and a **vision-capable** model name. An API key is optional. Use **Test connection** to confirm the server is reachable and lists your model.
+   - *OpenAI* — save your [API key](https://platform.openai.com/api-keys) as a secret and set a vision-capable model
+   - *Anthropic* — save your [API key](https://console.anthropic.com/settings/keys) as a secret and set a Claude model
+   - *Google Gemini* — save your [API key](https://makersuite.google.com/app/apikey) as a secret and pick a model
+4. Set the **OCR watch folder**: a specific folder, Obsidian's attachment folder, or Vaultkeeper's organize destination
+5. Set the **OCR output folder**: a specific folder, the source file's folder, Obsidian's attachment folder, or Vaultkeeper's organize destination
+
+##### Self-hosted example (Ollama)
+
+Pull a multimodal model — a text-only model will fail with *"model does not support multimodal requests"*:
+
+```bash
+ollama pull qwen2.5vl:7b
+```
+
+Then set **Custom server base URL** to `http://localhost:11434/v1` and **Custom model** to `qwen2.5vl:7b`. Nothing leaves your machine. Raise **Custom request timeout** if the model runs on CPU.
+
+> PDFs are only supported by Gemini and Anthropic. OpenAI and self-hosted vision models take images only — convert pages to images first.
 
 #### Commands
 | Command | Description |
@@ -97,16 +116,37 @@ A comprehensive Obsidian plugin that organizes and manages attachments, renames 
 Each OCR result is saved as a `.md` note (e.g. `screenshot.png` → `screenshot (OCR).md`) using a customizable template. Default structure:
 
 ```markdown
-# OCR Result for screenshot.png
+---
+ocr-processed: true
+---
 
-**Source:** ![[screenshot.png]]
-**Processed:** 2025-01-01T00:00:00.000Z
-**Status:** completed
+# OCR Result for screenshot.png
 
 ## Extracted Text
 
 [extracted text here]
 ```
+
+Turn on **Note properties** to add your own YAML frontmatter. For example:
+
+```yaml
+source: "[[{{path}}]]"
+processed: {{date}}
+status: {{status}}
+```
+
+produces:
+
+```markdown
+---
+source: "[[assets/screenshot.png]]"
+processed: 2026-08-11
+status: completed
+ocr-processed: true
+---
+```
+
+The **OCR processed field** is always appended (and not duplicated if you list it yourself).
 
 #### Supported file types
 Images: PNG, JPG, JPEG, WEBP, BMP, GIF, HEIC, HEIF — Documents: PDF
@@ -123,8 +163,9 @@ Images: PNG, JPG, JPEG, WEBP, BMP, GIF, HEIC, HEIF — Documents: PDF
 | Setting | Description |
 |---|---|
 | Destination | *Obsidian settings*, *Same location as file*, or *Separate folder* |
+| Obsidian attachment folder | Read-only preview of what Obsidian's own setting resolves to |
 | Default folder name | Folder name used in separate folder mode |
-| Sort into subfolders by | None, Date (year/month), File type, or Custom pattern |
+| Sort into subfolders by | None, Date (year/month), File type, or Custom pattern. Not applicable in *Same location as file* mode. |
 | Custom subfolder pattern | Tokens: `{{year}}`, `{{month}}`, `{{day}}`, `{{type}}`, `{{filename}}` |
 | Organize on startup | Auto-organize every time Obsidian starts |
 | Auto-organize interval | Re-organize on a timer (minutes, 0 = disabled) |
@@ -157,10 +198,19 @@ Available tokens for paste rename patterns:
 | Setting | Description |
 |---|---|
 | Enable OCR | Toggle OCR processing on/off |
-| OCR API key | Your Google Gemini API key |
-| Gemini model | Model to use (Gemini 2.0 Flash recommended) |
-| OCR watch folder | Folder monitored for new images/PDFs |
-| OCR output folder | Where OCR notes are saved |
+| OCR provider | Custom / self-hosted, OpenAI, Anthropic, or Google Gemini |
+| Custom server base URL | OpenAI-compatible endpoint root, e.g. `http://localhost:11434/v1` |
+| Custom model | Vision-capable model name as your server reports it |
+| Custom API key | Optional — leave unset for servers that need no auth |
+| Custom request timeout | Seconds to wait before giving up (30–1800) |
+| Test custom server | Check the server responds and lists your model |
+| OpenAI / Anthropic / Gemini API key | Stored via Obsidian's secret storage, never in plain settings |
+| OpenAI / Anthropic / Gemini model | Model used by the selected provider |
+| OCR watch folder | A specific folder, Obsidian's attachment folder, or Vaultkeeper's organize destination |
+| Watch folder path | The folder to monitor, when *A specific folder* is selected. Empty = whole vault. |
+| OCR output folder | A specific folder, the source file's folder, Obsidian's attachment folder, or Vaultkeeper's organize destination |
+| Output folder path | The folder to write notes to, when *A specific folder* is selected |
+| Output subfolder | Subfolder appended to the resolved output location. Empty = write directly there. |
 
 ### OCR Processing Settings
 | Setting | Description |
@@ -173,7 +223,28 @@ Available tokens for paste rename patterns:
 | OCR processed field | Frontmatter field name used to mark processed files |
 
 ### OCR Templates
-Customize the prompt sent to Gemini and the output note template. Available template variables: `{{filename}}`, `{{date}}`, `{{status}}`, `{{content}}`.
+| Setting | Description |
+|---|---|
+| Note properties | Add YAML frontmatter properties to each OCR note |
+| Properties | One `key: value` per line, token-substituted |
+| OCR prompt | Prompt sent to the model for each file |
+| OCR output template | Body of the generated note |
+
+Available variables in both the properties and the output template:
+
+| Token | Value |
+|---|---|
+| `{{content}}` | The extracted text (output template only) |
+| `{{filename}}` | Source filename with extension |
+| `{{basename}}` | Source filename without extension |
+| `{{path}}` | Full vault path to the source file |
+| `{{link}}` | Wikilink to the source file |
+| `{{date}}` | `YYYY-MM-DD` |
+| `{{time}}` | `HH:mm` |
+| `{{datetime}}` | `YYYY-MM-DD HH:mm` |
+| `{{status}}` | Processing status, e.g. `completed` |
+| `{{provider}}` | Provider that ran the OCR |
+| `{{model}}` | Model that ran the OCR |
 
 ## Support
 

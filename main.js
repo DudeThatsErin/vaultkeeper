@@ -1,6 +1,6 @@
 // === Attachment Organizer Plugin ===
 
-const { Plugin, Notice, Modal, Setting, PluginSettingTab, TFile, TFolder, MarkdownView, SecretComponent } = require('obsidian');
+const { Plugin, Notice, Modal, Setting, PluginSettingTab, TFile, TFolder, MarkdownView, SecretComponent, requestUrl } = require('obsidian');
 
 const DEFAULT_SETTINGS = {
     attachmentFolder: 'attachments',
@@ -15,16 +15,37 @@ const DEFAULT_SETTINGS = {
     separateFolderName: 'attachments',
     // OCR Settings
     ocrEnabled: false,
+    ocrProvider: 'custom', // 'custom', 'openai', 'anthropic', 'gemini'
     ocrApiKeyName: '',  // name of the secret in Obsidian SecretStorage (not the key itself)
     ocrModel: 'gemini-2.5-flash',
+    // OpenAI
+    ocrOpenAiModel: 'gpt-4o-mini',
+    ocrOpenAiApiKeyName: '',
+    // Anthropic
+    ocrAnthropicModel: 'claude-sonnet-4-5',
+    ocrAnthropicApiKeyName: '',
+    // Custom (any OpenAI-compatible server: Ollama, LM Studio, vLLM, llama.cpp, ...)
+    ocrCustomBaseUrl: 'http://localhost:11434/v1',
+    ocrCustomModel: 'qwen2.5vl:7b',
+    ocrCustomApiKeyName: '',
+    ocrCustomTimeout: 600, // seconds — local models can be slow
+    // Watch / output folders
+    ocrWatchFolderMode: 'custom', // 'custom', 'obsidian-settings', 'vaultkeeper'
     ocrWatchFolder: 'assets/attachments',
+    ocrOutputFolderMode: 'custom', // 'custom', 'obsidian-settings', 'vaultkeeper', 'source'
     ocrOutputFolder: 'assets/attachments/ocr',
+    ocrOutputSubfolder: 'ocr', // appended to the resolved base for non-custom modes; '' = no subfolder
     ocrAutoProcess: true,
     ocrAutoProcessNewFiles: true,
     ocrAutoProcessModifiedFiles: true,
     ocrProcessedField: 'ocr-processed',
+    ocrFrontmatterEnabled: false,
+    // One "key: value" per line. Values support the same tokens as the body
+    // template: {{filename}}, {{path}}, {{link}}, {{date}}, {{datetime}},
+    // {{time}}, {{status}}, {{provider}}, {{model}}.
+    ocrFrontmatterProperties: 'source: "[[{{path}}]]"\nprocessed: {{date}}\nstatus: {{status}}',
     ocrPrompt: 'Extract all text from this image/document. Provide the text content clearly and accurately.',
-    ocrTemplate: '# OCR Result for {{filename}}\n\n**Source:** ![[{{filename}}]]\n**Processed:** {{date}}\n**Status:** {{status}}\n\n## Extracted Text\n\n{{content}}',
+    ocrTemplate: '# OCR Result for {{filename}}\n\n## Extracted Text\n\n{{content}}',
     ocrBatchSize: 1,
     ocrMaxFileSize: 10485760, // 10MB in bytes
     ocrForceReprocess: false,
@@ -38,385 +59,6 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
     constructor(app, plugin) {
         super(app, plugin);
         this.plugin = plugin;
-    }
-
-    display() {
-        const { containerEl } = this;
-        containerEl.empty();
-
-        // Settings container
-        // Main Settings Section
-         // Support & Links Section
-         this.createAccordionSection(containerEl, 'Support & Links', (el) => {
-            const supportContainer = el.createDiv();
-            supportContainer.className = 'support-container';
-            
-            const buyMeACoffeeBtn = supportContainer.createEl('a', { 
-                text: '☕ Buy Me a Coffee',
-                href: 'https://buymeacoffee.com/erinskidds'
-            });
-            buyMeACoffeeBtn.className = 'support-link coffee-link';
-            
-            const githubBtn = supportContainer.createEl('a', { 
-                text: '⭐ Star on GitHub',
-                href: 'https://github.com/DudeThatsErin/AttachmentOrganizer'
-            });
-            githubBtn.className = 'support-link github-link';
-            
-            const issuesBtn = supportContainer.createEl('a', { 
-                text: '🐛 Report Issues',
-                href: 'https://github.com/DudeThatsErin/AttachmentOrganizer/issues'
-            });
-            issuesBtn.className = 'support-link issues-link';
-            
-            const discordBtn = supportContainer.createEl('a', { 
-                text: '💬 Discord Support',
-                href: 'https://discord.gg/XcJWhE3SEA'
-            });
-            discordBtn.className = 'support-link discord-link';
-        });
-
-        // General
-        this.createAccordionSection(containerEl, 'General', (el) => {
-            new Setting(el)
-                .setName('Attachment extensions')
-                .setDesc('Comma-separated file extensions treated as attachments')
-                .addText(text => text
-                    .setPlaceholder('png,jpg,jpeg,...')
-                    .setValue(this.plugin.settings.attachmentExtensions)
-                    .onChange(async (value) => {
-                        this.plugin.settings.attachmentExtensions = value;
-                        await this.plugin.saveSettings();
-                    }));
-
-            new Setting(el)
-                .setName('Ignore folders')
-                .setDesc('Comma-separated folder paths to skip when organizing or purging')
-                .addText(text => text
-                    .setPlaceholder('folder1,folder2/subfolder')
-                    .setValue(this.plugin.settings.ignoreFolders)
-                    .onChange(async (value) => {
-                        this.plugin.settings.ignoreFolders = value;
-                        await this.plugin.saveSettings();
-                    }));
-        });
-
-        // Organization
-        this.createAccordionSection(containerEl, 'Organization', (el) => {
-            new Setting(el)
-                .setName('Destination')
-                .setDesc('Where to move attachments when organizing')
-                .addDropdown(drop => drop
-                    .addOption('obsidian-settings', 'Use Obsidian settings')
-                    .addOption('same-location', 'Same location as file')
-                    .addOption('separate-folder', 'Separate folder')
-                    .setValue(this.plugin.settings.organizationMode)
-                    .onChange(async (value) => {
-                        this.plugin.settings.organizationMode = value;
-                        await this.plugin.saveSettings();
-                        this.display();
-                    }));
-
-            if (this.plugin.settings.organizationMode === 'separate-folder') {
-                new Setting(el)
-                    .setName('Default folder name')
-                    .setDesc('Pre-filled folder name shown in the organize prompt')
-                    .addText(text => text
-                        .setPlaceholder('attachments')
-                        .setValue(this.plugin.settings.separateFolderName)
-                        .onChange(async (value) => {
-                            this.plugin.settings.separateFolderName = value.trim() || 'attachments';
-                            await this.plugin.saveSettings();
-                        }));
-            }
-
-            new Setting(el)
-                .setName('Sort into subfolders by')
-                .setDesc('Sort attachments into subfolders inside the destination')
-                .addDropdown(drop => drop
-                    .addOption('none', 'No subfolders')
-                    .addOption('date', 'Date (year/month)')
-                    .addOption('type', 'File type (extension)')
-                    .addOption('custom', 'Custom pattern')
-                    .setValue(this.plugin.settings.autoOrganizeMode)
-                    .onChange(async (value) => {
-                        this.plugin.settings.autoOrganizeMode = value;
-                        await this.plugin.saveSettings();
-                        this.display();
-                    }));
-
-            if (this.plugin.settings.autoOrganizeMode === 'custom') {
-                new Setting(el)
-                    .setName('Custom subfolder pattern')
-                    .setDesc('Available tokens: {{year}}, {{month}}, {{day}}, {{type}}, {{filename}}')
-                    .addText(text => text
-                        .setPlaceholder('{{type}}/{{year}}-{{month}}')
-                        .setValue(this.plugin.settings.customPattern)
-                        .onChange(async (value) => {
-                            this.plugin.settings.customPattern = value;
-                            await this.plugin.saveSettings();
-                        }));
-            }
-
-            new Setting(el)
-                .setName('Organize on startup')
-                .setDesc('Automatically organize attachments each time Obsidian starts')
-                .addToggle(toggle => toggle
-                    .setValue(this.plugin.settings.organizeOnLoad)
-                    .onChange(async (value) => {
-                        this.plugin.settings.organizeOnLoad = value;
-                        await this.plugin.saveSettings();
-                    }));
-
-            new Setting(el)
-                .setName('Auto-organize interval (minutes)')
-                .setDesc('Re-organize on a schedule. 0 = disabled.')
-                .addSlider(slider => slider
-                    .setLimits(0, 120, 5)
-                    .setValue(this.plugin.settings.organizeInterval)
-                    .setDynamicTooltip()
-                    .onChange(async (value) => {
-                        this.plugin.settings.organizeInterval = value;
-                        await this.plugin.saveSettings();
-                        this.plugin.resetOrganizeInterval();
-                    }));
-        });
-
-        // Paste rename
-        this.createAccordionSection(containerEl, 'Paste rename', (el) => {
-            new Setting(el)
-                .setName('Rename mode')
-                .setDesc('How to rename attachments when pasted or dropped into a note')
-                .addDropdown(drop => drop
-                    .addOption('none', 'Do not rename')
-                    .addOption('date', 'Date-based (automatic)')
-                    .addOption('custom', 'Custom pattern (automatic)')
-                    .addOption('ask', 'Ask each time')
-                    .addOption('date-ask', 'Date-based + ask to confirm')
-                    .setValue(this.plugin.settings.pasteRenameMode)
-                    .onChange(async (value) => {
-                        this.plugin.settings.pasteRenameMode = value;
-                        await this.plugin.saveSettings();
-                        this.display();
-                    }));
-
-            if (this.plugin.settings.pasteRenameMode === 'date' || this.plugin.settings.pasteRenameMode === 'date-ask') {
-                new Setting(el)
-                    .setName('Date format pattern')
-                    .setDesc('Tokens: {{year}}, {{month}}, {{day}}, {{time}}, {{type}}, {{filename}} (note name), {{original}} (pasted file name)')
-                    .addText(text => text
-                        .setPlaceholder('{{year}}-{{month}}-{{day}}')
-                        .setValue(this.plugin.settings.pasteRenameDateFormat)
-                        .onChange(async (value) => {
-                            this.plugin.settings.pasteRenameDateFormat = value.trim() || '{{year}}-{{month}}-{{day}}';
-                            await this.plugin.saveSettings();
-                        }));
-            }
-
-            if (this.plugin.settings.pasteRenameMode === 'custom') {
-                new Setting(el)
-                    .setName('Custom rename pattern')
-                    .setDesc('Tokens: {{year}}, {{month}}, {{day}}, {{time}}, {{type}}, {{filename}} (note name), {{original}} (pasted file name)')
-                    .addText(text => text
-                        .setPlaceholder('{{year}}-{{month}}-{{day}}_{{filename}}')
-                        .setValue(this.plugin.settings.pasteRenameCustomPattern)
-                        .onChange(async (value) => {
-                            this.plugin.settings.pasteRenameCustomPattern = value.trim() || '{{year}}-{{month}}-{{day}}_{{filename}}';
-                            await this.plugin.saveSettings();
-                        }));
-            }
-        });
-
-        // Purge
-        this.createAccordionSection(containerEl, 'Purge', (el) => {
-            new Setting(el)
-                .setName('Confirm before purging')
-                .setDesc('Show a confirmation prompt before deleting unlinked attachments.')
-                .addToggle(toggle => toggle
-                    .setValue(this.plugin.settings.confirmPurge)
-                    .onChange(async (value) => {
-                        this.plugin.settings.confirmPurge = value;
-                        await this.plugin.saveSettings();
-                        this.display();
-                    }));
-        });
-
-        // OCR
-        this.createAccordionSection(containerEl, 'OCR', (el) => {
-            new Setting(el)
-                .setName('Enable OCR')
-                .setDesc('Extract text from images and PDFs using Google Gemini AI')
-                .addToggle(toggle => toggle
-                    .setValue(this.plugin.settings.ocrEnabled)
-                    .onChange(async (value) => {
-                        this.plugin.settings.ocrEnabled = value;
-                        await this.plugin.saveSettings();
-                        this.display();
-                    }));
-
-            if (this.plugin.settings.ocrEnabled) {
-                new Setting(el)
-                    .setName('Gemini API key')
-                    .then(setting => {
-                        const frag = document.createDocumentFragment();
-                        frag.appendText('Select a saved secret, or create one with your key from ');
-                        const link = frag.createEl('a', { text: 'Google AI Studio', href: 'https://makersuite.google.com/app/apikey' });
-                        link.setAttr('target', '_blank');
-                        link.setAttr('rel', 'noopener noreferrer');
-                        setting.setDesc(frag);
-                    })
-                    .addComponent(el => new SecretComponent(this.app, el)
-                        .setValue(this.plugin.settings.ocrApiKeyName)
-                        .onChange(async (value) => {
-                            this.plugin.settings.ocrApiKeyName = value;
-                            await this.plugin.saveSettings();
-                        }));
-
-                new Setting(el)
-                    .setName('Gemini model')
-                    .setDesc('The Gemini model to use for OCR')
-                    .addDropdown(drop => drop
-                        .addOption('gemini-2.5-flash', 'Gemini 2.5 Flash (Recommended)')
-                        .addOption('gemini-2.5-flash-lite', 'Gemini 2.5 Flash-Lite (Fastest, Free tier)')
-                        .addOption('gemini-2.5-pro', 'Gemini 2.5 Pro (Most capable)')
-                        .addOption('gemini-3.5-flash', 'Gemini 3.5 Flash (Most intelligent)')
-                        .addOption('gemini-3.1-flash-lite', 'Gemini 3.1 Flash-Lite (Budget)')
-                        .addOption('gemini-1.5-flash', 'Gemini 1.5 Flash (Legacy)')
-                        .addOption('gemini-1.5-pro', 'Gemini 1.5 Pro (Legacy)')
-                        .setValue(this.plugin.settings.ocrModel)
-                        .onChange(async (value) => {
-                            this.plugin.settings.ocrModel = value;
-                            await this.plugin.saveSettings();
-                        }));
-
-                new Setting(el)
-                    .setName('OCR watch folder')
-                    .setDesc('Folder to monitor for images and PDFs to OCR')
-                    .addText(text => text
-                        .setPlaceholder('assets/attachments')
-                        .setValue(this.plugin.settings.ocrWatchFolder)
-                        .onChange(async (value) => {
-                            this.plugin.settings.ocrWatchFolder = value.trim();
-                            await this.plugin.saveSettings();
-                        }));
-
-                new Setting(el)
-                    .setName('OCR output folder')
-                    .setDesc('Where to save OCR notes (leave empty to use same folder as source)')
-                    .addText(text => text
-                        .setPlaceholder('assets/attachments/ocr')
-                        .setValue(this.plugin.settings.ocrOutputFolder)
-                        .onChange(async (value) => {
-                            this.plugin.settings.ocrOutputFolder = value.trim();
-                            await this.plugin.saveSettings();
-                        }));
-            }
-        });
-
-        // OCR Processing Settings
-        if (this.plugin.settings.ocrEnabled) {
-            this.createAccordionSection(containerEl, 'OCR processing', (el) => {
-                new Setting(el)
-                    .setName('Batch size')
-                    .setDesc('Files processed per batch. 1 is recommended for the free tier.')
-                    .addSlider(slider => slider
-                        .setLimits(1, 5, 1)
-                        .setValue(this.plugin.settings.ocrBatchSize)
-                        .setDynamicTooltip()
-                        .onChange(async (value) => {
-                            this.plugin.settings.ocrBatchSize = value;
-                            await this.plugin.saveSettings();
-                        }));
-
-                new Setting(el)
-                    .setName('Max file size (MB)')
-                    .setDesc('Files larger than this will be skipped')
-                    .addSlider(slider => slider
-                        .setLimits(1, 50, 1)
-                        .setValue(this.plugin.settings.ocrMaxFileSize / 1024 / 1024)
-                        .setDynamicTooltip()
-                        .onChange(async (value) => {
-                            this.plugin.settings.ocrMaxFileSize = value * 1024 * 1024;
-                            await this.plugin.saveSettings();
-                        }));
-
-                new Setting(el)
-                    .setName('Force reprocess')
-                    .setDesc('Reprocess files even when OCR output already exists')
-                    .addToggle(toggle => toggle
-                        .setValue(this.plugin.settings.ocrForceReprocess)
-                        .onChange(async (value) => {
-                            this.plugin.settings.ocrForceReprocess = value;
-                            await this.plugin.saveSettings();
-                        }));
-
-                new Setting(el)
-                    .setName('Auto-process new files')
-                    .setDesc('OCR new images and PDFs added to the watch folder')
-                    .addToggle(toggle => toggle
-                        .setValue(this.plugin.settings.ocrAutoProcessNewFiles)
-                        .onChange(async (value) => {
-                            this.plugin.settings.ocrAutoProcessNewFiles = value;
-                            await this.plugin.saveSettings();
-                        }));
-
-                new Setting(el)
-                    .setName('Auto-process modified files')
-                    .setDesc('OCR files again when they are modified')
-                    .addToggle(toggle => toggle
-                        .setValue(this.plugin.settings.ocrAutoProcessModifiedFiles)
-                        .onChange(async (value) => {
-                            this.plugin.settings.ocrAutoProcessModifiedFiles = value;
-                            await this.plugin.saveSettings();
-                        }));
-
-                new Setting(el)
-                    .setName('OCR processed field')
-                    .setDesc('Frontmatter field used to mark files as already processed')
-                    .addText(text => text
-                        .setPlaceholder('ocr-processed')
-                        .setValue(this.plugin.settings.ocrProcessedField)
-                        .onChange(async (value) => {
-                            this.plugin.settings.ocrProcessedField = value;
-                            await this.plugin.saveSettings();
-                        }));
-            });
-
-            // OCR Templates Section
-            this.createAccordionSection(containerEl, 'OCR templates', (el) => {
-                const ocrPromptSetting = new Setting(el)
-                    .setName('OCR prompt')
-                    .setDesc('Prompt sent to Gemini when processing each file')
-                    .setClass('setting-item-heading');
-                
-                ocrPromptSetting.settingEl.style.display = 'block';
-                const promptTextArea = ocrPromptSetting.settingEl.createEl('textarea');
-                promptTextArea.placeholder = 'Extract all text from this image/document...';
-                promptTextArea.value = this.plugin.settings.ocrPrompt;
-                promptTextArea.rows = 8;
-                promptTextArea.className = 'ocr-template-textarea';
-                promptTextArea.addEventListener('input', async (e) => {
-                    this.plugin.settings.ocrPrompt = e.target.value;
-                    await this.plugin.saveSettings();
-                });
-
-                const ocrTemplateSetting = new Setting(el)
-                    .setName('OCR output template')
-                    .setDesc('Template for OCR output notes. Variables: {{filename}}, {{date}}, {{status}}, {{content}}')
-                    .setClass('setting-item-heading');
-                
-                ocrTemplateSetting.settingEl.style.display = 'block';
-                const templateTextArea = ocrTemplateSetting.settingEl.createEl('textarea');
-                templateTextArea.placeholder = '# OCR Result for {{filename}}...';
-                templateTextArea.value = this.plugin.settings.ocrTemplate;
-                templateTextArea.rows = 10;
-                templateTextArea.className = 'ocr-template-textarea';
-                templateTextArea.addEventListener('input', async (e) => {
-                    this.plugin.settings.ocrTemplate = e.target.value;
-                    await this.plugin.saveSettings();
-                });
-            });
-        }
     }
 
     getSettingDefinitions() {
@@ -487,6 +129,16 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                         }
                     },
                     {
+                        name: 'Obsidian attachment folder',
+                        desc: 'Read-only. Change this in Obsidian → Settings → Files and links → Default location for new attachments.',
+                        aliases: ['default location for new attachments'],
+                        visible: () => s.organizationMode === 'obsidian-settings',
+                        render: (setting) => {
+                            setting.setName('Obsidian attachment folder')
+                                .setDesc(this.plugin.describeObsidianAttachmentSetting());
+                        }
+                    },
+                    {
                         name: 'Default folder name',
                         desc: 'Pre-filled folder name shown in the organize prompt',
                         aliases: ['separate folder'],
@@ -496,6 +148,7 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                     {
                         name: 'Sort into subfolders by',
                         desc: 'Sort attachments into subfolders inside the destination',
+                        visible: () => s.organizationMode !== 'same-location',
                         control: {
                             type: 'dropdown', key: 'autoOrganizeMode',
                             options: {
@@ -510,7 +163,7 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                         name: 'Custom subfolder pattern',
                         desc: 'Available tokens: {{year}}, {{month}}, {{day}}, {{type}}, {{filename}}',
                         aliases: ['organize pattern', 'subfolder template'],
-                        visible: () => s.autoOrganizeMode === 'custom',
+                        visible: () => s.autoOrganizeMode === 'custom' && s.organizationMode !== 'same-location',
                         control: { type: 'text', key: 'customPattern', placeholder: '{{type}}/{{year}}-{{month}}' }
                     },
                     {
@@ -582,15 +235,142 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                 items: [
                     {
                         name: 'Enable OCR',
-                        desc: 'Extract text from images and PDFs using Google Gemini AI',
-                        aliases: ['optical character recognition', 'gemini', 'image text'],
+                        desc: 'Extract text from images and PDFs using an AI model',
+                        aliases: ['optical character recognition', 'gemini', 'openai', 'anthropic', 'ollama', 'image text'],
                         control: { type: 'toggle', key: 'ocrEnabled' }
                     },
+                    {
+                        name: 'OCR provider',
+                        desc: 'Which AI service performs the text extraction',
+                        aliases: ['ocr provider', 'chatgpt', 'claude', 'ollama', 'local model'],
+                        visible: () => s.ocrEnabled,
+                        control: {
+                            type: 'dropdown', key: 'ocrProvider',
+                            options: {
+                                'custom': 'Custom / self-hosted (OpenAI-compatible)',
+                                'openai': 'OpenAI (ChatGPT)',
+                                'anthropic': 'Anthropic (Claude)',
+                                'gemini': 'Google Gemini'
+                            }
+                        }
+                    },
+
+                    // --- Custom / self-hosted ---
+                    {
+                        name: 'Custom server base URL',
+                        desc: 'OpenAI-compatible endpoint root. Ollama: http://localhost:11434/v1 — LM Studio: http://localhost:1234/v1',
+                        aliases: ['ollama url', 'custom endpoint', 'base url', 'local ai'],
+                        visible: () => s.ocrEnabled && s.ocrProvider === 'custom',
+                        control: { type: 'text', key: 'ocrCustomBaseUrl', placeholder: 'http://localhost:11434/v1' }
+                    },
+                    {
+                        name: 'Custom model',
+                        desc: 'Model name as the server reports it. Must be vision-capable (e.g. qwen2.5vl:7b, llama3.2-vision:11b, minicpm-v).',
+                        aliases: ['ollama model', 'custom model'],
+                        visible: () => s.ocrEnabled && s.ocrProvider === 'custom',
+                        control: { type: 'text', key: 'ocrCustomModel', placeholder: 'qwen2.5vl:7b' }
+                    },
+                    {
+                        name: 'Custom API key (optional)',
+                        desc: 'Leave unset for servers that do not require auth, such as a local Ollama.',
+                        aliases: ['custom api key'],
+                        visible: () => s.ocrEnabled && s.ocrProvider === 'custom',
+                        render: (setting) => {
+                            setting.setName('Custom API key (optional)')
+                                .setDesc('Leave unset for servers that do not require auth, such as a local Ollama.')
+                                .addComponent(el => new SecretComponent(this.app, el)
+                                    .setValue(s.ocrCustomApiKeyName)
+                                    .onChange(async (value) => {
+                                        s.ocrCustomApiKeyName = value;
+                                        await save();
+                                    }));
+                        }
+                    },
+                    {
+                        name: 'Custom request timeout (seconds)',
+                        desc: 'How long to wait for the model before giving up. Local models on CPU can take several minutes.',
+                        aliases: ['ocr timeout'],
+                        visible: () => s.ocrEnabled && s.ocrProvider === 'custom',
+                        control: { type: 'slider', key: 'ocrCustomTimeout', min: 30, max: 1800, step: 30 }
+                    },
+                    {
+                        name: 'Test custom server',
+                        desc: 'Check that the base URL responds and the model is available',
+                        aliases: ['test connection'],
+                        visible: () => s.ocrEnabled && s.ocrProvider === 'custom',
+                        render: (setting) => {
+                            setting.setName('Test custom server')
+                                .setDesc('Check that the base URL responds and the model is available')
+                                .addButton(btn => btn
+                                    .setButtonText('Test connection')
+                                    .onClick(() => this.plugin.testCustomOcrServer()));
+                        }
+                    },
+
+                    // --- OpenAI ---
+                    {
+                        name: 'OpenAI API key',
+                        desc: 'Select a saved secret, or create one with your key from platform.openai.com',
+                        aliases: ['openai key', 'chatgpt key'],
+                        visible: () => s.ocrEnabled && s.ocrProvider === 'openai',
+                        render: (setting) => {
+                            const frag = document.createDocumentFragment();
+                            frag.appendText('Select a saved secret, or create one with your key from ');
+                            const link = frag.createEl('a', { text: 'the OpenAI dashboard', href: 'https://platform.openai.com/api-keys' });
+                            link.setAttr('target', '_blank');
+                            link.setAttr('rel', 'noopener noreferrer');
+                            setting.setName('OpenAI API key').setDesc(frag)
+                                .addComponent(el => new SecretComponent(this.app, el)
+                                    .setValue(s.ocrOpenAiApiKeyName)
+                                    .onChange(async (value) => {
+                                        s.ocrOpenAiApiKeyName = value;
+                                        await save();
+                                    }));
+                        }
+                    },
+                    {
+                        name: 'OpenAI model',
+                        desc: 'Any vision-capable OpenAI model',
+                        aliases: ['gpt model', 'chatgpt model'],
+                        visible: () => s.ocrEnabled && s.ocrProvider === 'openai',
+                        control: { type: 'text', key: 'ocrOpenAiModel', placeholder: 'gpt-4o-mini' }
+                    },
+
+                    // --- Anthropic ---
+                    {
+                        name: 'Anthropic API key',
+                        desc: 'Select a saved secret, or create one with your key from the Anthropic Console',
+                        aliases: ['claude key', 'anthropic key'],
+                        visible: () => s.ocrEnabled && s.ocrProvider === 'anthropic',
+                        render: (setting) => {
+                            const frag = document.createDocumentFragment();
+                            frag.appendText('Select a saved secret, or create one with your key from ');
+                            const link = frag.createEl('a', { text: 'the Anthropic Console', href: 'https://console.anthropic.com/settings/keys' });
+                            link.setAttr('target', '_blank');
+                            link.setAttr('rel', 'noopener noreferrer');
+                            setting.setName('Anthropic API key').setDesc(frag)
+                                .addComponent(el => new SecretComponent(this.app, el)
+                                    .setValue(s.ocrAnthropicApiKeyName)
+                                    .onChange(async (value) => {
+                                        s.ocrAnthropicApiKeyName = value;
+                                        await save();
+                                    }));
+                        }
+                    },
+                    {
+                        name: 'Anthropic model',
+                        desc: 'Any vision-capable Claude model',
+                        aliases: ['claude model'],
+                        visible: () => s.ocrEnabled && s.ocrProvider === 'anthropic',
+                        control: { type: 'text', key: 'ocrAnthropicModel', placeholder: 'claude-sonnet-4-5' }
+                    },
+
+                    // --- Gemini ---
                     {
                         name: 'Gemini API key',
                         desc: 'Select a saved secret, or create one with your key from Google AI Studio',
                         aliases: ['ocr api key', 'gemini key', 'google ai'],
-                        visible: () => s.ocrEnabled,
+                        visible: () => s.ocrEnabled && s.ocrProvider === 'gemini',
                         render: (setting) => {
                             const frag = document.createDocumentFragment();
                             frag.appendText('Select a saved secret, or create one with your key from ');
@@ -610,7 +390,7 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                         name: 'Gemini model',
                         desc: 'The Gemini model to use for OCR',
                         aliases: ['ocr model', 'gemini 2.5', 'gemini flash'],
-                        visible: () => s.ocrEnabled,
+                        visible: () => s.ocrEnabled && s.ocrProvider === 'gemini',
                         control: {
                             type: 'dropdown', key: 'ocrModel',
                             options: {
@@ -624,19 +404,66 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                             }
                         }
                     },
+
+                    // --- Folders ---
                     {
                         name: 'OCR watch folder',
-                        desc: 'Folder to monitor for images and PDFs to OCR',
+                        desc: 'Which folder to monitor for images and PDFs to OCR',
                         aliases: ['ocr folder', 'watch folder'],
                         visible: () => s.ocrEnabled,
+                        control: {
+                            type: 'dropdown', key: 'ocrWatchFolderMode',
+                            options: {
+                                'custom': 'A specific folder',
+                                'obsidian-settings': "Obsidian's attachment folder",
+                                'vaultkeeper': "Vaultkeeper's organize destination"
+                            }
+                        }
+                    },
+                    {
+                        name: 'Watch folder path',
+                        desc: 'Folder to monitor for images and PDFs to OCR',
+                        aliases: ['ocr watch path'],
+                        visible: () => s.ocrEnabled && s.ocrWatchFolderMode === 'custom',
                         control: { type: 'text', key: 'ocrWatchFolder', placeholder: 'assets/attachments' }
                     },
                     {
+                        name: 'Resolved watch folder',
+                        desc: 'Read-only preview',
+                        visible: () => s.ocrEnabled && s.ocrWatchFolderMode !== 'custom',
+                        render: (setting) => {
+                            setting.setName('Resolved watch folder')
+                                .setDesc(this.plugin.getOcrWatchFolder() || '(vault root)');
+                        }
+                    },
+                    {
                         name: 'OCR output folder',
-                        desc: 'Where to save OCR notes (leave empty to use same folder as source)',
+                        desc: 'Where to save OCR notes',
                         aliases: ['ocr output', 'ocr notes folder'],
                         visible: () => s.ocrEnabled,
+                        control: {
+                            type: 'dropdown', key: 'ocrOutputFolderMode',
+                            options: {
+                                'custom': 'A specific folder',
+                                'source': 'Same folder as the source file',
+                                'obsidian-settings': "Obsidian's attachment folder",
+                                'vaultkeeper': "Vaultkeeper's organize destination"
+                            }
+                        }
+                    },
+                    {
+                        name: 'Output folder path',
+                        desc: 'Folder to save OCR notes into',
+                        aliases: ['ocr output path'],
+                        visible: () => s.ocrEnabled && s.ocrOutputFolderMode === 'custom',
                         control: { type: 'text', key: 'ocrOutputFolder', placeholder: 'assets/attachments/ocr' }
+                    },
+                    {
+                        name: 'Output subfolder',
+                        desc: 'Subfolder appended to the resolved output location. Leave empty to write notes directly there.',
+                        aliases: ['ocr subfolder'],
+                        visible: () => s.ocrEnabled && s.ocrOutputFolderMode !== 'custom',
+                        control: { type: 'text', key: 'ocrOutputSubfolder', placeholder: 'ocr' }
                     },
                 ],
             },
@@ -701,11 +528,40 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                 visible: () => s.ocrEnabled,
                 items: [
                     {
+                        name: 'Note properties',
+                        desc: 'Add YAML frontmatter properties to each OCR note',
+                        aliases: ['frontmatter', 'ocr properties', 'yaml'],
+                        control: { type: 'toggle', key: 'ocrFrontmatterEnabled' }
+                    },
+                    {
+                        name: 'Properties',
+                        desc: 'One "key: value" per line',
+                        aliases: ['ocr frontmatter properties'],
+                        visible: () => s.ocrFrontmatterEnabled,
+                        render: (setting) => {
+                            const frag = document.createDocumentFragment();
+                            frag.appendText('One "key: value" per line, written as YAML frontmatter at the top of each OCR note. Tokens: ');
+                            frag.createEl('code', { text: '{{filename}} {{basename}} {{path}} {{link}} {{date}} {{time}} {{datetime}} {{status}} {{provider}} {{model}}' });
+                            frag.appendText('. The "OCR processed field" below is added automatically.');
+                            setting.setName('Properties').setDesc(frag).setClass('setting-item-heading');
+                            setting.settingEl.style.display = 'block';
+                            const ta = setting.settingEl.createEl('textarea');
+                            ta.placeholder = 'source: "[[{{path}}]]"\nprocessed: {{date}}\nstatus: {{status}}';
+                            ta.value = s.ocrFrontmatterProperties;
+                            ta.rows = 6;
+                            ta.className = 'ocr-template-textarea';
+                            ta.addEventListener('input', async (e) => {
+                                s.ocrFrontmatterProperties = e.target.value;
+                                await save();
+                            });
+                        }
+                    },
+                    {
                         name: 'OCR prompt',
-                        desc: 'Prompt sent to Gemini when processing each file',
+                        desc: 'Prompt sent to the model when processing each file',
                         aliases: ['gemini prompt', 'ocr instruction'],
                         render: (setting) => {
-                            setting.setName('OCR prompt').setDesc('Prompt sent to Gemini when processing each file')
+                            setting.setName('OCR prompt').setDesc('Prompt sent to the model when processing each file')
                                 .setClass('setting-item-heading');
                             setting.settingEl.style.display = 'block';
                             const ta = setting.settingEl.createEl('textarea');
@@ -721,11 +577,11 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                     },
                     {
                         name: 'OCR output template',
-                        desc: 'Template for OCR output notes. Variables: {{filename}}, {{date}}, {{status}}, {{content}}',
+                        desc: 'Body of OCR notes. Variables: {{content}}, {{filename}}, {{basename}}, {{path}}, {{link}}, {{date}}, {{time}}, {{datetime}}, {{status}}, {{provider}}, {{model}}',
                         aliases: ['ocr template', 'ocr note template'],
                         render: (setting) => {
                             setting.setName('OCR output template')
-                                .setDesc('Template for OCR output notes. Variables: {{filename}}, {{date}}, {{status}}, {{content}}')
+                                .setDesc('Body of OCR notes. Variables: {{content}}, {{filename}}, {{basename}}, {{path}}, {{link}}, {{date}}, {{time}}, {{datetime}}, {{status}}, {{provider}}, {{model}}')
                                 .setClass('setting-item-heading');
                             setting.settingEl.style.display = 'block';
                             const ta = setting.settingEl.createEl('textarea');
@@ -1160,7 +1016,7 @@ module.exports = class AttachmentOrganizer extends Plugin {
                 const activeFile = this.app.workspace.getActiveFile();
                 if (activeFile && this.isOcrTarget(activeFile)) {
                     if (!checking) {
-                        this.processFileForOcr(activeFile);
+                        this.runOcrOnFile(activeFile);
                     }
                     return true;
                 }
@@ -1344,37 +1200,87 @@ module.exports = class AttachmentOrganizer extends Plugin {
         new Notice(`Organized ${organized} attachments, skipped ${skipped}`);
     }
 
+    // Raw value of Obsidian's "Default location for new attachments"
+    // (Settings → Files and links). getConfig is the supported accessor and
+    // works on desktop and mobile; vault.config is the older internal field.
+    getObsidianAttachmentSetting() {
+        let cfg;
+        if (typeof this.app.vault.getConfig === 'function') {
+            cfg = this.app.vault.getConfig('attachmentFolderPath');
+        }
+        if (cfg === undefined || cfg === null) {
+            cfg = this.app.vault.config?.attachmentFolderPath;
+        }
+        return typeof cfg === 'string' ? cfg : '';
+    }
+
+    // Human-readable summary of the Obsidian setting, for the settings tab.
+    describeObsidianAttachmentSetting() {
+        const cfg = this.getObsidianAttachmentSetting();
+        if (!cfg || cfg === '/') return 'Vault root (Obsidian setting: "Vault folder")';
+        if (cfg === './') return 'Same folder as the note (Obsidian setting: "Same folder as current file")';
+        if (cfg.startsWith('./')) return `Subfolder "${cfg.slice(2)}" under the note's folder (Obsidian setting: "In subfolder under current folder")`;
+        return `"${cfg}" (Obsidian setting: "In the folder specified below")`;
+    }
+
+    // Resolve Obsidian's attachment folder setting to a concrete vault folder.
+    // `noteFolder` is the folder of the note the attachment belongs to, used
+    // for the two note-relative forms. Returns '' for the vault root.
+    resolveObsidianAttachmentFolder(noteFolder) {
+        const cfg = this.getObsidianAttachmentSetting().trim();
+        const base = (noteFolder ?? '').replace(/^\/+|\/+$/g, '');
+
+        // "Vault folder"
+        if (!cfg || cfg === '/') return '';
+        // "Same folder as current file"
+        if (cfg === '.' || cfg === './') return base;
+        // "In subfolder under current folder"
+        if (cfg.startsWith('./')) {
+            const sub = cfg.slice(2).replace(/^\/+|\/+$/g, '');
+            if (!sub) return base;
+            return base ? `${base}/${sub}` : sub;
+        }
+        // "In the folder specified below" — an absolute vault path
+        return cfg.replace(/^\/+|\/+$/g, '');
+    }
+
+    // Folder of the first note that links to `file`, or null when nothing
+    // links to it. '' is a valid result (note lives at the vault root).
+    getLinkingNoteFolder(file) {
+        const resolvedLinks = this.app.metadataCache.resolvedLinks;
+        for (const [notePath, links] of Object.entries(resolvedLinks)) {
+            if (links[file.path] === undefined) continue;
+            const noteFile = this.app.vault.getAbstractFileByPath(notePath);
+            if (noteFile instanceof TFile) {
+                return noteFile.parent?.path ?? '';
+            }
+        }
+        return null;
+    }
+
     getNewAttachmentPath(file, resolvedFolderName) {
         let baseFolder;
 
         if (this.settings.organizationMode === 'obsidian-settings') {
-            // Read Obsidian's attachment folder path from config directly.
-            // getAvailablePathForAttachments(null) is unreliable — it resolves
-            // relative paths against the wrong context and causes infinite nesting.
-            const cfgPath = this.app.vault.config?.attachmentFolderPath || '';
-            if (!cfgPath || cfgPath.startsWith('./') || cfgPath.startsWith('../')) {
-                // Relative to note location — we can't know which note owns this
-                // attachment, so keep the file in its current folder as the base.
-                baseFolder = this.stripOrganizedSuffix(file.parent?.path || '');
-            } else {
-                baseFolder = cfgPath;
+            // Note-relative forms of the Obsidian setting need to know which
+            // note owns the attachment. When nothing links to it there is no
+            // correct answer, so leave the file alone rather than guessing.
+            const cfg = this.getObsidianAttachmentSetting().trim();
+            const isNoteRelative = !cfg || cfg === '.' || cfg.startsWith('./');
+            let noteFolder = null;
+            if (isNoteRelative && cfg !== '') {
+                noteFolder = this.getLinkingNoteFolder(file);
+                if (noteFolder === null) return file.path;
             }
+            baseFolder = this.resolveObsidianAttachmentFolder(noteFolder ?? '');
         } else if (this.settings.organizationMode === 'same-location') {
-            // Place attachment in the same folder as the note that links to it.
-            // Fall back to the attachment's own folder if no linking note is found.
-            const resolvedLinks = this.app.metadataCache.resolvedLinks;
-            let linkingNoteFolder = null;
-            for (const [notePath, links] of Object.entries(resolvedLinks)) {
-                if (links[file.path] !== undefined) {
-                    const noteFile = this.app.vault.getAbstractFileByPath(notePath);
-                    if (noteFile instanceof TFile) {
-                        // parent.path is '' for root-level notes — that's valid
-                        linkingNoteFolder = noteFile.parent?.path ?? '';
-                        break;
-                    }
-                }
-            }
-            baseFolder = linkingNoteFolder ?? this.stripOrganizedSuffix(file.parent?.path ?? '');
+            // Same folder as the note that links to the attachment — nothing
+            // else. Subfolder sorting deliberately does not apply here, and an
+            // attachment nothing links to stays exactly where it is instead of
+            // being swept into a folder at the vault root.
+            const linkingNoteFolder = this.getLinkingNoteFolder(file);
+            if (linkingNoteFolder === null) return file.path;
+            return linkingNoteFolder ? `${linkingNoteFolder}/${file.name}` : file.name;
         } else {
             // separate-folder: use the resolved (prompted) folder name
             baseFolder = resolvedFolderName || this.settings.separateFolderName || 'attachments';
@@ -1568,8 +1474,8 @@ module.exports = class AttachmentOrganizer extends Plugin {
     }
 
     async ocrPickAttachment() {
-        if (!this.settings.ocrEnabled || !this.settings.ocrApiKeyName) {
-            new Notice('OCR is not enabled or API key is missing. Check settings.');
+        if (!(await this.isOcrConfigured())) {
+            new Notice(this.ocrConfigError(), 10000);
             return;
         }
         const targets = this.app.vault.getFiles().filter(f => this.isOcrTarget(f));
@@ -1578,31 +1484,43 @@ module.exports = class AttachmentOrganizer extends Plugin {
             return;
         }
         new OcrPickerModal(this.app, targets, async (file) => {
-            new Notice(`Starting OCR for ${file.name}...`);
-            try {
-                const ocrPath = this.getOcrNotePath(file);
-                const alreadyExists = await this.app.vault.adapter.exists(ocrPath);
-                if (alreadyExists && !this.settings.ocrForceReprocess) {
-                    new Notice(`OCR note already exists for ${file.name}. Enable "Force reprocess" in settings to overwrite.`);
-                    return;
-                }
-                await this.ensureFolderExists(this.getOcrOutputFolder(file));
-                const fileBuffer = await this.app.vault.readBinary(file);
-                const mimeType = this.getMimeType(file.extension);
-                const extractedText = await this.callGeminiOCR(fileBuffer, mimeType);
-                const noteContent = this.buildOcrNote(file, extractedText, 'completed');
-                if (alreadyExists) {
-                    const existing = this.app.vault.getAbstractFileByPath(ocrPath);
-                    await this.app.vault.modify(existing, noteContent);
-                } else {
-                    await this.app.vault.create(ocrPath, noteContent);
-                }
-                new Notice(`OCR complete for ${file.name}`);
-            } catch (error) {
-                console.error('OCR pick error:', error);
-                new Notice(`OCR failed for ${file.name}: ${error.message}`);
+            const ocrPath = this.getOcrNotePath(file);
+            const alreadyExists = await this.app.vault.adapter.exists(ocrPath);
+            if (alreadyExists && !this.settings.ocrForceReprocess) {
+                new Notice(`OCR note already exists for ${file.name}. Enable "Force reprocess" in settings to overwrite.`);
+                return;
             }
+            // Picked explicitly, so bypass the watch-folder restriction.
+            await this.runOcrOnFile(file);
         }).open();
+    }
+
+    // OCR a single file regardless of the watch folder, with its own notice.
+    async runOcrOnFile(file) {
+        if (!(await this.isOcrConfigured())) {
+            new Notice(this.ocrConfigError(), 10000);
+            return;
+        }
+        const progress = this.startOcrProgress(`Running OCR on ${file.name} via ${this.getOcrProviderLabel()}...`);
+        try {
+            await this.ensureFolderExists(this.getOcrOutputFolder(file));
+            const fileBuffer = await this.app.vault.readBinary(file);
+            const mimeType = this.getMimeType(file.extension);
+            if (!mimeType) throw new Error(`Unsupported file type: .${file.extension}`);
+            const extractedText = await this.callOcrProvider(fileBuffer, mimeType, progress);
+            const noteContent = this.buildOcrNote(file, extractedText, 'completed');
+            const ocrPath = this.getOcrNotePath(file);
+            const existing = this.app.vault.getAbstractFileByPath(ocrPath);
+            if (existing instanceof TFile) {
+                await this.app.vault.modify(existing, noteContent);
+            } else {
+                await this.app.vault.create(ocrPath, noteContent);
+            }
+            progress.done(`OCR complete: ${file.name}`);
+        } catch (error) {
+            console.error('OCR error:', error);
+            progress.done(`OCR failed for ${file.name}: ${error.message}`, 10000);
+        }
     }
 
     async moveAttachmentsBetweenFolders() {
@@ -1668,98 +1586,407 @@ module.exports = class AttachmentOrganizer extends Plugin {
         return null;
     }
 
-    getOcrOutputFolder(sourceFile) {
+    // Where Vaultkeeper's own "Organization" settings would put an attachment.
+    // Used by the OCR folder settings so OCR notes can follow the same layout.
+    // `sourceFile` is optional — without one, note-relative modes fall back to
+    // the vault root so the setting still has a previewable value.
+    getVaultkeeperOrganizeFolder(sourceFile) {
         const mode = this.settings.organizationMode;
         let base;
         if (mode === 'obsidian-settings') {
-            if (this.app.vault.getAvailablePathForAttachments) {
-                const suggested = this.app.vault.getAvailablePathForAttachments(sourceFile.name, sourceFile.extension, null);
-                const lastSlash = suggested.lastIndexOf('/');
-                base = lastSlash >= 0 ? suggested.substring(0, lastSlash) : '';
-            } else {
-                base = this.app.vault.config?.attachmentFolderPath || '';
-            }
+            const noteFolder = sourceFile ? this.getLinkingNoteFolder(sourceFile) : null;
+            base = this.resolveObsidianAttachmentFolder(noteFolder ?? (sourceFile?.parent?.path || ''));
         } else if (mode === 'same-location') {
-            // The source attachment may already sit inside the organized
-            // layout — strip it so the pattern isn't applied twice.
-            base = this.stripOrganizedSuffix(sourceFile.parent?.path || '');
+            const noteFolder = sourceFile ? this.getLinkingNoteFolder(sourceFile) : null;
+            return noteFolder ?? this.stripOrganizedSuffix(sourceFile?.parent?.path || '');
         } else {
-            // separate-folder: use saved default (no prompt for OCR auto-runs)
             base = this.settings.separateFolderName || 'attachments';
         }
 
         // Apply subfolder sorting (autoOrganizeMode)
+        const suffix = this.getSubfolderSuffix(sourceFile);
+        if (suffix) base = base ? `${base}/${suffix}` : suffix;
+        return base;
+    }
+
+    // Subfolder segment the current "Sort into subfolders by" setting produces.
+    getSubfolderSuffix(sourceFile) {
+        const date = new Date(sourceFile?.stat?.mtime || Date.now());
         if (this.settings.autoOrganizeMode === 'date') {
-            const date = new Date(sourceFile.stat?.mtime || Date.now());
-            const year = date.getFullYear();
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            base = `${base}/${year}/${month}`;
-        } else if (this.settings.autoOrganizeMode === 'type') {
-            const ext = sourceFile.extension?.toLowerCase() || 'unknown';
-            base = `${base}/${ext}`;
-        } else if (this.settings.autoOrganizeMode === 'custom' && this.settings.customPattern) {
-            const date = new Date(sourceFile.stat?.mtime || Date.now());
+            return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}`;
+        }
+        if (this.settings.autoOrganizeMode === 'type') {
+            return sourceFile?.extension?.toLowerCase() || 'unknown';
+        }
+        if (this.settings.autoOrganizeMode === 'custom' && this.settings.customPattern) {
             const replacements = {
-                '{{type}}': sourceFile.extension?.toLowerCase() || 'unknown',
+                '{{type}}': sourceFile?.extension?.toLowerCase() || 'unknown',
                 '{{year}}': date.getFullYear().toString(),
                 '{{month}}': String(date.getMonth() + 1).padStart(2, '0'),
                 '{{day}}': String(date.getDate()).padStart(2, '0'),
-                '{{filename}}': sourceFile.basename
+                '{{filename}}': sourceFile?.basename || ''
             };
             let pattern = this.settings.customPattern;
             for (const [placeholder, value] of Object.entries(replacements)) {
                 pattern = pattern.replace(new RegExp(placeholder.replace(/[{}]/g, '\\$&'), 'g'), value);
             }
-            base = `${base}/${pattern}`;
+            return pattern;
+        }
+        return '';
+    }
+
+    // Folder monitored for OCR-able attachments. '' means the whole vault.
+    getOcrWatchFolder() {
+        const trim = (p) => (p || '').replace(/^\/+|\/+$/g, '');
+        switch (this.settings.ocrWatchFolderMode) {
+            case 'obsidian-settings':
+                return trim(this.resolveObsidianAttachmentFolder(''));
+            case 'vaultkeeper':
+                return trim(this.getVaultkeeperOrganizeFolder(null));
+            default:
+                return trim(this.settings.ocrWatchFolder);
+        }
+    }
+
+    isInOcrWatchFolder(file) {
+        const watchFolder = this.getOcrWatchFolder();
+        // Empty watch folder = watch the entire vault.
+        if (!watchFolder) return true;
+        return file.path.startsWith(watchFolder + '/') || file.path === watchFolder;
+    }
+
+    getOcrOutputFolder(sourceFile) {
+        const trim = (p) => (p || '').replace(/^\/+|\/+$/g, '');
+        const mode = this.settings.ocrOutputFolderMode;
+
+        // A specific folder — used verbatim, no subfolder appended.
+        if (mode === 'custom') return trim(this.settings.ocrOutputFolder);
+
+        let base;
+        if (mode === 'source') {
+            base = trim(sourceFile?.parent?.path || '');
+        } else if (mode === 'obsidian-settings') {
+            const noteFolder = sourceFile ? this.getLinkingNoteFolder(sourceFile) : null;
+            base = trim(this.resolveObsidianAttachmentFolder(noteFolder ?? (sourceFile?.parent?.path || '')));
+        } else {
+            base = trim(this.getVaultkeeperOrganizeFolder(sourceFile));
         }
 
-        // Always put OCR notes in an 'ocr' subfolder within the resolved base
-        return base ? `${base}/ocr` : 'ocr';
+        const sub = trim(this.settings.ocrOutputSubfolder);
+        if (!sub) return base;
+        return base ? `${base}/${sub}` : sub;
     }
 
     getOcrNotePath(sourceFile) {
         const folder = this.getOcrOutputFolder(sourceFile);
-        return `${folder}/${sourceFile.basename} (OCR).md`;
+        const name = `${sourceFile.basename} (OCR).md`;
+        return folder ? `${folder}/${name}` : name;
     }
 
-    buildOcrNote(sourceFile, extractedText, status = 'completed') {
+    // Tokens available in both the frontmatter properties and the body template.
+    getOcrTokens(sourceFile, status) {
         const now = new Date();
-        const dateStr = now.toISOString().split('T')[0];
-        const timeStr = now.toTimeString().split(' ')[0];
-        
-        const template = this.settings.ocrTemplate || '# OCR Result for {{filename}}\n\n**Source:** ![[{{filename}}]]\n**Processed:** {{date}}\n**Status:** {{status}}\n\n## Extracted Text\n\n{{content}}';
-        
-        // Replace template variables
-        const result = template
-            .replace(/\{\{filename\}\}/g, sourceFile.name)
-            .replace(/\{\{date\}\}/g, now.toISOString())
-            .replace(/\{\{status\}\}/g, status)
-            .replace(/\{\{content\}\}/g, extractedText);
-        
+        const pad = (n) => String(n).padStart(2, '0');
+        const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+        const timeStr = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+        return {
+            '{{filename}}': sourceFile.name,
+            '{{basename}}': sourceFile.basename,
+            '{{path}}': sourceFile.path,
+            '{{link}}': `[[${sourceFile.path}]]`,
+            '{{date}}': dateStr,
+            '{{time}}': timeStr,
+            '{{datetime}}': `${dateStr} ${timeStr}`,
+            '{{status}}': status,
+            '{{provider}}': this.settings.ocrProvider,
+            '{{model}}': this.getOcrModelName(),
+        };
+    }
+
+    applyOcrTokens(text, tokens) {
+        let result = text;
+        for (const [token, value] of Object.entries(tokens)) {
+            result = result.split(token).join(value ?? '');
+        }
         return result;
     }
 
-    async callGeminiOCR(fileBuffer, mimeType, retryCount = 0) {
-        const apiKey = this.settings.ocrApiKeyName
-            ? await this.app.secretStorage.get(this.settings.ocrApiKeyName)
-            : null;
+    // User-defined YAML frontmatter, plus the processed-marker field.
+    buildOcrFrontmatter(tokens) {
+        const lines = [];
+
+        if (this.settings.ocrFrontmatterEnabled) {
+            const raw = this.applyOcrTokens(this.settings.ocrFrontmatterProperties || '', tokens);
+            for (const line of raw.split('\n')) {
+                const trimmed = line.trim();
+                // Blank lines and comments are dropped; list continuations
+                // ("  - item") are kept as-is so multi-value properties work.
+                if (!trimmed || trimmed.startsWith('#')) continue;
+                if (trimmed.startsWith('-')) { lines.push(line.replace(/\s+$/, '')); continue; }
+                if (!/^[^:]+:/.test(trimmed)) {
+                    console.warn(`Vaultkeeper: skipping malformed OCR property line: ${line}`);
+                    continue;
+                }
+                lines.push(trimmed);
+            }
+        }
+
+        const field = (this.settings.ocrProcessedField || '').trim();
+        if (field && !lines.some(l => l.startsWith(`${field}:`))) {
+            lines.push(`${field}: true`);
+        }
+
+        if (lines.length === 0) return '';
+        return `---\n${lines.join('\n')}\n---\n\n`;
+    }
+
+    buildOcrNote(sourceFile, extractedText, status = 'completed') {
+        const tokens = this.getOcrTokens(sourceFile, status);
+        const template = this.settings.ocrTemplate || '# OCR Result for {{filename}}\n\n## Extracted Text\n\n{{content}}';
+        const body = this.applyOcrTokens(template, tokens)
+            .split('{{content}}').join(extractedText);
+        return this.buildOcrFrontmatter(tokens) + body;
+    }
+
+    // --- OCR providers ---------------------------------------------------
+
+    getOcrModelName() {
+        switch (this.settings.ocrProvider) {
+            case 'openai': return this.settings.ocrOpenAiModel;
+            case 'anthropic': return this.settings.ocrAnthropicModel;
+            case 'gemini': return this.settings.ocrModel;
+            default: return this.settings.ocrCustomModel;
+        }
+    }
+
+    getOcrProviderLabel() {
+        switch (this.settings.ocrProvider) {
+            case 'openai': return 'OpenAI';
+            case 'anthropic': return 'Anthropic';
+            case 'gemini': return 'Gemini';
+            default: return 'custom server';
+        }
+    }
+
+    async getOcrApiKey() {
+        const nameByProvider = {
+            openai: this.settings.ocrOpenAiApiKeyName,
+            anthropic: this.settings.ocrAnthropicApiKeyName,
+            gemini: this.settings.ocrApiKeyName,
+            custom: this.settings.ocrCustomApiKeyName,
+        };
+        const name = nameByProvider[this.settings.ocrProvider];
+        if (!name) return null;
+        return await this.app.secretStorage.get(name);
+    }
+
+    // True when the current provider has everything it needs to run.
+    async isOcrConfigured() {
+        if (!this.settings.ocrEnabled) return false;
+        if (this.settings.ocrProvider === 'custom') {
+            // A local server usually needs no key — a URL and model is enough.
+            return !!(this.settings.ocrCustomBaseUrl && this.settings.ocrCustomModel);
+        }
+        return !!(await this.getOcrApiKey());
+    }
+
+    ocrConfigError() {
+        if (!this.settings.ocrEnabled) return 'OCR is disabled. Enable it in Vaultkeeper settings.';
+        if (this.settings.ocrProvider === 'custom') {
+            return 'Custom OCR server is not configured. Set a base URL and model in Vaultkeeper settings.';
+        }
+        return `${this.getOcrProviderLabel()} API key is not configured. Set a secret in Vaultkeeper settings.`;
+    }
+
+    // ArrayBuffer -> base64, chunked to avoid blowing the call stack on
+    // large files.
+    arrayBufferToBase64(fileBuffer) {
+        const bytes = new Uint8Array(fileBuffer);
+        const chunkSize = 0x8000;
+        let binary = '';
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+            binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+        }
+        return btoa(binary);
+    }
+
+    // Dispatches to the configured provider. `progress` is the handle from
+    // startOcrProgress(), used to keep the notice alive during retries.
+    async callOcrProvider(fileBuffer, mimeType, progress = null) {
+        switch (this.settings.ocrProvider) {
+            case 'openai': return await this.callOpenAiOCR(fileBuffer, mimeType);
+            case 'anthropic': return await this.callAnthropicOCR(fileBuffer, mimeType);
+            case 'gemini': return await this.callGeminiOCR(fileBuffer, mimeType, 0, progress);
+            default: return await this.callCustomOCR(fileBuffer, mimeType);
+        }
+    }
+
+    get ocrPromptText() {
+        return this.settings.ocrPrompt || 'Extract all text from this image/document. Provide the text content clearly and accurately.';
+    }
+
+    // OpenAI-compatible chat completions — used for both OpenAI itself and
+    // any self-hosted server that speaks the same API (Ollama, LM Studio,
+    // vLLM, llama.cpp, LiteLLM, ...).
+    async callOpenAiCompatibleOCR({ baseUrl, model, apiKey, fileBuffer, mimeType, timeoutSeconds }) {
+        if (mimeType === 'application/pdf') {
+            throw new Error('PDFs are not supported by this provider. Use Gemini or Anthropic for PDFs, or convert the page to an image first.');
+        }
+        const base64String = this.arrayBufferToBase64(fileBuffer);
+        const url = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
+
+        const headers = { 'Content-Type': 'application/json' };
+        if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+
+        const body = {
+            model,
+            messages: [{
+                role: 'user',
+                content: [
+                    { type: 'text', text: this.ocrPromptText },
+                    { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64String}` } }
+                ]
+            }]
+        };
+
+        const response = await this.ocrRequest(url, headers, body, timeoutSeconds);
+        if (response.status < 200 || response.status >= 300) {
+            throw new Error(`${this.getOcrProviderLabel()} error ${response.status}: ${response.text}`);
+        }
+        const result = response.json;
+        const text = result?.choices?.[0]?.message?.content;
+        if (typeof text !== 'string') {
+            throw new Error(`Unexpected response from ${this.getOcrProviderLabel()}: ${response.text?.slice(0, 300)}`);
+        }
+        return text.trim();
+    }
+
+    async callOpenAiOCR(fileBuffer, mimeType) {
+        const apiKey = await this.getOcrApiKey();
+        if (!apiKey) throw new Error('OpenAI API key not configured. Set a secret in OCR settings.');
+        return await this.callOpenAiCompatibleOCR({
+            baseUrl: 'https://api.openai.com/v1',
+            model: this.settings.ocrOpenAiModel,
+            apiKey,
+            fileBuffer,
+            mimeType,
+            timeoutSeconds: 180,
+        });
+    }
+
+    async callCustomOCR(fileBuffer, mimeType) {
+        const baseUrl = (this.settings.ocrCustomBaseUrl || '').trim();
+        if (!baseUrl) throw new Error('Custom server base URL is not set.');
+        if (!this.settings.ocrCustomModel) throw new Error('Custom server model is not set.');
+        return await this.callOpenAiCompatibleOCR({
+            baseUrl,
+            model: this.settings.ocrCustomModel,
+            apiKey: await this.getOcrApiKey(),
+            fileBuffer,
+            mimeType,
+            timeoutSeconds: this.settings.ocrCustomTimeout || 600,
+        });
+    }
+
+    async callAnthropicOCR(fileBuffer, mimeType) {
+        const apiKey = await this.getOcrApiKey();
+        if (!apiKey) throw new Error('Anthropic API key not configured. Set a secret in OCR settings.');
+
+        const base64String = this.arrayBufferToBase64(fileBuffer);
+        const block = mimeType === 'application/pdf'
+            ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64String } }
+            : { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64String } };
+
+        const body = {
+            model: this.settings.ocrAnthropicModel,
+            max_tokens: 8192,
+            messages: [{ role: 'user', content: [block, { type: 'text', text: this.ocrPromptText }] }]
+        };
+        const headers = {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+            // Required for browser-context requests such as Obsidian's.
+            'anthropic-dangerous-direct-browser-access': 'true',
+        };
+
+        const response = await this.ocrRequest('https://api.anthropic.com/v1/messages', headers, body, 180);
+        if (response.status < 200 || response.status >= 300) {
+            throw new Error(`Anthropic API error ${response.status}: ${response.text}`);
+        }
+        const text = response.json?.content?.find(c => c.type === 'text')?.text;
+        if (typeof text !== 'string') {
+            throw new Error(`Unexpected response from Anthropic: ${response.text?.slice(0, 300)}`);
+        }
+        return text.trim();
+    }
+
+    // requestUrl bypasses the renderer's CORS checks, which browsers apply to
+    // localhost servers (Ollama) and to api.anthropic.com alike. The timeout
+    // is enforced here because requestUrl has none of its own.
+    async ocrRequest(url, headers, body, timeoutSeconds) {
+        const request = requestUrl({
+            url,
+            method: 'POST',
+            headers,
+            body: JSON.stringify(body),
+            throw: false,
+        });
+        let timer;
+        const timeout = new Promise((_, reject) => {
+            timer = setTimeout(
+                () => reject(new Error(`Request timed out after ${timeoutSeconds}s. Raise the timeout in settings if the model is just slow.`)),
+                timeoutSeconds * 1000
+            );
+        });
+        try {
+            return await Promise.race([request, timeout]);
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    async testCustomOcrServer() {
+        const baseUrl = (this.settings.ocrCustomBaseUrl || '').trim().replace(/\/+$/, '');
+        if (!baseUrl) { new Notice('Set a base URL first.'); return; }
+        const notice = new Notice(`Contacting ${baseUrl}...`, 0);
+        try {
+            const apiKey = await this.getOcrApiKey();
+            const headers = apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {};
+            const res = await requestUrl({ url: `${baseUrl}/models`, method: 'GET', headers, throw: false });
+            if (res.status < 200 || res.status >= 300) {
+                notice.setMessage(`Server responded ${res.status}: ${res.text?.slice(0, 200)}`);
+                setTimeout(() => notice.hide(), 8000);
+                return;
+            }
+            const ids = (res.json?.data || []).map(m => m.id);
+            const wanted = this.settings.ocrCustomModel;
+            const found = ids.includes(wanted);
+            notice.setMessage(
+                found
+                    ? `Connected. Model "${wanted}" is available.`
+                    : `Connected, but "${wanted}" was not listed. Available: ${ids.join(', ') || '(none)'}`
+            );
+            setTimeout(() => notice.hide(), 10000);
+        } catch (e) {
+            notice.setMessage(`Could not reach ${baseUrl}: ${e.message}`);
+            setTimeout(() => notice.hide(), 10000);
+        }
+    }
+
+    async callGeminiOCR(fileBuffer, mimeType, retryCount = 0, progress = null) {
+        const apiKey = await this.getOcrApiKey();
         const model = this.settings.ocrModel;
-        const prompt = this.settings.ocrPrompt || 'Extract all text from this image/document. Provide the text content clearly and accurately.';
-        
+        const prompt = this.ocrPromptText;
+
         if (!apiKey) {
             throw new Error('Gemini API key not configured. Set a secret in OCR Settings.');
         }
 
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-        
-        // Convert ArrayBuffer to base64 string properly (avoid stack overflow for large files)
-        const uint8Array = new Uint8Array(fileBuffer);
-        let binaryString = '';
-        for (let i = 0; i < uint8Array.length; i++) {
-            binaryString += String.fromCharCode(uint8Array[i]);
-        }
-        const base64String = btoa(binaryString);
-        
+
+        const base64String = this.arrayBufferToBase64(fileBuffer);
+
         const requestBody = {
             contents: [{
                 parts: [
@@ -1777,26 +2004,17 @@ module.exports = class AttachmentOrganizer extends Plugin {
         };
 
         try {
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(requestBody)
-            });
+            const response = await this.ocrRequest(url, { 'Content-Type': 'application/json' }, requestBody, 180);
 
-            if (!response.ok) {
-                const errorText = await response.text();
+            if (response.status < 200 || response.status >= 300) {
+                const errorText = response.text;
                 console.error('Gemini API Error Details:', {
                     status: response.status,
-                    statusText: response.statusText,
                     responseText: errorText,
-                    url: url,
-                    apiKey: apiKey ? `${apiKey.substring(0, 10)}...` : 'missing',
                     model: model,
                     retryCount: retryCount
                 });
-                
+
                 if (response.status === 429) {
                     // Parse retry delay from error response
                     let retryDelay = 30; // Default 30 seconds
@@ -1815,10 +2033,11 @@ module.exports = class AttachmentOrganizer extends Plugin {
                     // Implement exponential backoff with max 3 retries
                     if (retryCount < 3) {
                         const backoffDelay = Math.min(retryDelay * Math.pow(2, retryCount), 300); // Max 5 minutes
-                        new Notice(`Rate limit hit. Retrying in ${backoffDelay} seconds... (attempt ${retryCount + 1}/3)`);
-                        
+                        const msg = `Rate limit hit. Retrying in ${backoffDelay} seconds... (attempt ${retryCount + 1}/3)`;
+                        if (progress) progress.setMessage(msg); else new Notice(msg);
+
                         await new Promise(resolve => setTimeout(resolve, backoffDelay * 1000));
-                        return await this.callGeminiOCR(fileBuffer, mimeType, retryCount + 1);
+                        return await this.callGeminiOCR(fileBuffer, mimeType, retryCount + 1, progress);
                     } else {
                         new Notice('Gemini API quota exceeded. Try again later or switch to gemini-1.5-flash model.');
                         throw new Error(`API_ERROR_429: Rate limit exceeded after ${retryCount} retries. ${errorText}`);
@@ -1827,8 +2046,8 @@ module.exports = class AttachmentOrganizer extends Plugin {
                 throw new Error(`Gemini API error: ${response.status} - ${errorText}`);
             }
 
-            const result = await response.json();
-            
+            const result = response.json;
+
             if (!result.candidates || !result.candidates[0] || !result.candidates[0].content) {
                 throw new Error('Invalid response from Gemini API');
             }
@@ -1842,14 +2061,61 @@ module.exports = class AttachmentOrganizer extends Plugin {
         }
     }
 
-    async processFileForOcr(file) {
-        if (!this.settings.ocrEnabled || !this.settings.ocrApiKey) {
+    // A Notice with no timeout, so it stays on screen for the whole run —
+    // local models in particular can take minutes. Callers must call done()
+    // (or fail()) in a finally block. An elapsed-seconds counter ticks so it
+    // is obvious the run has not silently stalled.
+    startOcrProgress(message) {
+        const notice = new Notice('', 0);
+        const startedAt = Date.now();
+        let label = message;
+        let finished = false;
+
+        const paint = () => {
+            const secs = Math.floor((Date.now() - startedAt) / 1000);
+            const mins = Math.floor(secs / 60);
+            const elapsed = mins > 0 ? `${mins}m ${secs % 60}s` : `${secs}s`;
+            notice.setMessage(`${label} (${elapsed})`);
+        };
+        paint();
+        const timer = window.setInterval(paint, 1000);
+        this.registerInterval(timer);
+
+        const stop = () => {
+            if (finished) return;
+            finished = true;
+            window.clearInterval(timer);
+        };
+
+        return {
+            setMessage: (msg) => { label = msg; paint(); },
+            // Replace the notice with a final message that fades on its own.
+            done: (msg, timeoutMs = 5000) => {
+                stop();
+                if (msg) {
+                    notice.setMessage(msg);
+                    window.setTimeout(() => notice.hide(), timeoutMs);
+                } else {
+                    notice.hide();
+                }
+            },
+            // No-op once done() has run, so a finally-block hide() does not
+            // yank the final message off screen.
+            hide: () => { if (finished) return; stop(); notice.hide(); },
+        };
+    }
+
+    // Runs OCR on one file and writes the note. `progress` is an existing
+    // progress handle to reuse (batch runs share one notice); when omitted a
+    // notice is created and closed here.
+    async processFileForOcr(file, progress = null) {
+        if (!(await this.isOcrConfigured())) {
             return;
         }
 
+        const ownsProgress = !progress;
         try {
-            // Check if file is in watch folder
-            if (!file.path.startsWith(this.settings.ocrWatchFolder + '/') && file.path !== this.settings.ocrWatchFolder) {
+            if (!this.isInOcrWatchFolder(file)) {
                 return;
             }
 
@@ -1858,45 +2124,55 @@ module.exports = class AttachmentOrganizer extends Plugin {
                 return;
             }
 
-            // Check if OCR note already exists
             const ocrPath = this.getOcrNotePath(file);
-            if (await this.app.vault.adapter.exists(ocrPath)) {
+            const alreadyExists = await this.app.vault.adapter.exists(ocrPath);
+            if (alreadyExists && !this.settings.ocrForceReprocess) {
                 return;
             }
 
-            new Notice(`Starting OCR for ${file.name}...`);
+            if (ownsProgress) {
+                progress = this.startOcrProgress(`Running OCR on ${file.name} via ${this.getOcrProviderLabel()}...`);
+            } else {
+                progress.setMessage(`Running OCR on ${file.name} via ${this.getOcrProviderLabel()}...`);
+            }
 
             await this.ensureFolderExists(this.getOcrOutputFolder(file));
 
-            // Process with Gemini
             const fileBuffer = await this.app.vault.readBinary(file);
             const mimeType = this.getMimeType(file.extension);
-            const extractedText = await this.callGeminiOCR(fileBuffer, mimeType);
-            
-            // Create OCR note
-            const noteContent = this.buildOcrNote(file, extractedText, this.settings.ocrProcessedField);
-            await this.app.vault.create(ocrPath, noteContent);
+            const extractedText = await this.callOcrProvider(fileBuffer, mimeType, progress);
 
-            new Notice(`OCR completed for ${file.name}`);
+            const noteContent = this.buildOcrNote(file, extractedText, 'completed');
+            const existing = this.app.vault.getAbstractFileByPath(ocrPath);
+            if (existing instanceof TFile) {
+                await this.app.vault.modify(existing, noteContent);
+            } else {
+                await this.app.vault.create(ocrPath, noteContent);
+            }
+
+            if (ownsProgress) progress.done(`OCR complete: ${file.name}`);
         } catch (error) {
             console.error('OCR processing error:', error);
-            new Notice(`OCR failed for ${file.name}: ${error.message}`);
+            if (progress && ownsProgress) {
+                progress.done(`OCR failed for ${file.name}: ${error.message}`, 10000);
+            } else {
+                new Notice(`OCR failed for ${file.name}: ${error.message}`, 10000);
+            }
+            if (!ownsProgress) throw error;
         }
     }
 
     async ocrWatchFolder() {
-        if (!this.settings.ocrEnabled || !this.settings.ocrApiKey) {
-            new Notice('OCR is not enabled or API key is missing');
+        if (!(await this.isOcrConfigured())) {
+            new Notice(this.ocrConfigError(), 10000);
             return;
         }
 
         // Reset stop flag
         this.ocrStopRequested = false;
 
-        const watchFolder = this.settings.ocrWatchFolder;
-        let files = this.app.vault.getFiles().filter(f => 
-            (f.path.startsWith(watchFolder + '/') || f.path === watchFolder) && 
-            this.isOcrTarget(f)
+        let files = this.app.vault.getFiles().filter(f =>
+            this.isInOcrWatchFolder(f) && this.isOcrTarget(f) && !this.isOcrOutputFile(f)
         );
 
         if (files.length === 0) {
@@ -1936,59 +2212,64 @@ module.exports = class AttachmentOrganizer extends Plugin {
         // Sort by file size (smallest first for better batching)
         validFiles.sort((a, b) => a.size - b.size);
 
-        new Notice(`Processing ${validFiles.length} files for OCR in batches...`);
         let processed = 0;
         let failed = 0;
 
-        // Process in batches
-        const batchSize = this.settings.ocrBatchSize;
-        for (let i = 0; i < validFiles.length; i += batchSize) {
-            // Check if stop was requested
-            if (this.ocrStopRequested) {
-                new Notice(`OCR processing stopped by user. Processed: ${processed}, Failed: ${failed}`);
-                return;
-            }
+        // One notice for the whole run — it stays up until every file is done.
+        const progress = this.startOcrProgress(`Running OCR on ${validFiles.length} file${validFiles.length !== 1 ? 's' : ''} via ${this.getOcrProviderLabel()}...`);
 
-            const batch = validFiles.slice(i, i + batchSize);
-            const batchNum = Math.floor(i / batchSize) + 1;
-            const totalBatches = Math.ceil(validFiles.length / batchSize);
-            
-            new Notice(`Processing batch ${batchNum}/${totalBatches} (${batch.length} files)...`);
-
-            for (const { file } of batch) {
-                // Check if stop was requested before processing each file
+        try {
+            // Process in batches
+            const batchSize = this.settings.ocrBatchSize;
+            for (let i = 0; i < validFiles.length; i += batchSize) {
+                // Check if stop was requested
                 if (this.ocrStopRequested) {
-                    new Notice(`OCR processing stopped by user. Processed: ${processed}, Failed: ${failed}`);
+                    progress.done(`OCR stopped. Processed: ${processed}, failed: ${failed}`);
                     return;
                 }
 
-                try {
-                    await this.processFileForOcr(file);
-                    processed++;
-                } catch (error) {
-                    console.error(`Failed to process ${file.name}:`, error);
-                    failed++;
-                    
-                    // Stop entire batch processing on quota exceeded
-                    if (error.message.includes('QUOTA_EXCEEDED') || error.message.includes('API_ERROR_429')) {
-                        new Notice(`OCR batch stopped due to quota limit. Processed: ${processed}, Failed: ${failed}`);
+                const batch = validFiles.slice(i, i + batchSize);
+
+                for (const { file } of batch) {
+                    // Check if stop was requested before processing each file
+                    if (this.ocrStopRequested) {
+                        progress.done(`OCR stopped. Processed: ${processed}, failed: ${failed}`);
                         return;
                     }
+
+                    progress.setMessage(`OCR ${processed + failed + 1}/${validFiles.length}: ${file.name} via ${this.getOcrProviderLabel()}...`);
+
+                    try {
+                        await this.processFileForOcr(file, progress);
+                        processed++;
+                    } catch (error) {
+                        console.error(`Failed to process ${file.name}:`, error);
+                        failed++;
+
+                        // Stop entire batch processing on quota exceeded
+                        if (error.message.includes('QUOTA_EXCEEDED') || error.message.includes('API_ERROR_429')) {
+                            progress.done(`OCR stopped: provider quota limit. Processed: ${processed}, failed: ${failed}`, 10000);
+                            return;
+                        }
+                    }
+                }
+
+                // Longer delay between batches to avoid API rate limits
+                if (i + batchSize < validFiles.length) {
+                    progress.setMessage(`Waiting between batches (${processed} done, ${failed} failed)...`);
+                    await new Promise(resolve => setTimeout(resolve, 10000)); // 10 second delay
                 }
             }
 
-            // Longer delay between batches to avoid API rate limits
-            if (i + batchSize < validFiles.length) {
-                await new Promise(resolve => setTimeout(resolve, 10000)); // 10 second delay
-            }
+            progress.done(`OCR complete: ${processed} processed, ${failed} failed`);
+        } finally {
+            progress.hide();
         }
-
-        new Notice(`OCR batch complete: ${processed} processed, ${failed} failed`);
     }
 
     async ocrReprocessAll() {
-        if (!this.settings.ocrEnabled || !this.settings.ocrApiKey) {
-            new Notice('OCR is not enabled or API key is missing');
+        if (!(await this.isOcrConfigured())) {
+            new Notice(this.ocrConfigError(), 10000);
             return;
         }
 
@@ -2005,14 +2286,14 @@ module.exports = class AttachmentOrganizer extends Plugin {
     }
 
     setupFileWatchers() {
-        if (!this.settings.ocrEnabled) {
-            return;
-        }
+        // Registered unconditionally and gated inside the handlers, so
+        // toggling OCR on does not require reloading the plugin.
 
         // Watch for file creation with recursion prevention
         this.registerEvent(
             this.app.vault.on('create', (file) => {
-                if (this.settings.ocrAutoProcessNewFiles && this.isOcrTarget(file) && !this.isOcrOutputFile(file)) {
+                if (this.settings.ocrEnabled && this.settings.ocrAutoProcessNewFiles
+                    && this.isOcrTarget(file) && !this.isOcrOutputFile(file)) {
                     this.handleFileCreated(file);
                 }
             })
@@ -2021,7 +2302,8 @@ module.exports = class AttachmentOrganizer extends Plugin {
         // Watch for file modification with recursion prevention
         this.registerEvent(
             this.app.vault.on('modify', (file) => {
-                if (this.settings.ocrAutoProcessModifiedFiles && this.isOcrTarget(file) && !this.isOcrOutputFile(file)) {
+                if (this.settings.ocrEnabled && this.settings.ocrAutoProcessModifiedFiles
+                    && this.isOcrTarget(file) && !this.isOcrOutputFile(file)) {
                     this.handleFileModified(file);
                 }
             })
@@ -2031,27 +2313,26 @@ module.exports = class AttachmentOrganizer extends Plugin {
     // Prevent processing OCR output files to avoid infinite recursion
     isOcrOutputFile(file) {
         if (!file || !file.name) return false;
-        
-        // Check if file is in OCR output folder
-        if (this.settings.ocrOutputFolder && file.path.startsWith(this.settings.ocrOutputFolder + '/')) { // legacy check, keep for safety
+
+        // Check if file is in the resolved OCR output folder
+        const outputFolder = this.getOcrOutputFolder(file);
+        if (outputFolder && file.path.startsWith(outputFolder + '/')) {
             return true;
         }
-        
+
         // Check if file name indicates it's an OCR output
         return file.name.includes('(OCR)') || file.name.includes('OCR Result');
     }
 
     async handleFileCreated(file) {
-        const watchFolder = this.settings.ocrWatchFolder;
-        
         // Prevent re-entry for files already being processed
         if (this.processingFiles.has(file.path)) {
             console.log(`Skipping ${file.name}: already being processed`);
             return;
         }
-        
+
         // Check if file is in watch folder
-        if (!file.path.startsWith(watchFolder + '/') && file.path !== watchFolder) {
+        if (!this.isInOcrWatchFolder(file)) {
             return;
         }
 
@@ -2084,16 +2365,14 @@ module.exports = class AttachmentOrganizer extends Plugin {
     }
 
     async handleFileModified(file) {
-        const watchFolder = this.settings.ocrWatchFolder;
-        
         // Prevent re-entry for files already being processed
         if (this.processingFiles.has(file.path)) {
             console.log(`Skipping ${file.name}: already being processed`);
             return;
         }
-        
+
         // Check if file is in watch folder
-        if (!file.path.startsWith(watchFolder + '/') && file.path !== watchFolder) {
+        if (!this.isInOcrWatchFolder(file)) {
             return;
         }
 
@@ -2130,8 +2409,9 @@ module.exports = class AttachmentOrganizer extends Plugin {
         // Small delay to ensure file modifications are complete
         setTimeout(async () => {
             try {
-                new Notice(`Updating OCR for modified file: ${file.name}`);
-                await this.processFileForOcr(file);
+                // The source changed, so the existing note is stale — rewrite
+                // it rather than going through the "skip if exists" path.
+                await this.runOcrOnFile(file);
             } catch (error) {
                 console.error(`Auto-OCR update failed for ${file.name}:`, error);
             } finally {
