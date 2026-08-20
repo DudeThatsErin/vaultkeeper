@@ -78,6 +78,7 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                         name: 'Support & links',
                         searchable: false,
                         render: (setting) => {
+                            setting.settingEl.addClass('vaultkeeper-support-links-setting');
                             setting.nameEl.remove();
                             setting.descEl.remove();
                             setting.controlEl.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;padding:4px 0;justify-content:flex-start;width:100%';

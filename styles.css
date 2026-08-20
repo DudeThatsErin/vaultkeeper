@@ -141,7 +141,7 @@
 }
 .discord-link:hover { background: #4752c4; color: #fff; }
 
-.setting-item:has(.support-link) {
+.vaultkeeper-support-links-setting {
     border: none;
     padding-top: 4px;
     padding-bottom: 4px;
