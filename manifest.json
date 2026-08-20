@@ -1,7 +1,7 @@
 {
     "id": "vaultkeeper",
     "name": "Vaultkeeper",
-    "version": "1.5.6",
+    "version": "1.5.2",
     "minAppVersion": "0.15.0",
     "description": "Organize and manage attachments, rename pasted files, and extract text via OCR \u2014 all within your vault.",
     "author": "Erin Skidds",
