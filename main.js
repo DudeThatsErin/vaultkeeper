@@ -11,7 +11,8 @@ const DEFAULT_SETTINGS = {
     customPattern: '{{type}}/{{year}}-{{month}}',
     organizeOnLoad: false,
     organizeInterval: 0, // minutes, 0 = disabled
-    organizationMode: 'obsidian-settings', // 'obsidian-settings', 'same-location', or 'separate-folder'
+    organizationMode: 'obsidian-settings', // 'obsidian-settings', 'same-location', 'same-location-subfolder', or 'separate-folder'
+    sameLocationSubfolderName: '_files',
     separateFolderName: 'attachments',
     // OCR Settings
     ocrEnabled: false,
@@ -30,11 +31,13 @@ const DEFAULT_SETTINGS = {
     ocrCustomApiKeyName: '',
     ocrCustomTimeout: 600, // seconds — local models can be slow
     // Watch / output folders
-    ocrWatchFolderMode: 'custom', // 'custom', 'obsidian-settings', 'vaultkeeper'
+    ocrWatchFolderMode: 'custom', // 'custom', 'folder-name', 'obsidian-settings', 'vaultkeeper'
     ocrWatchFolder: 'assets/attachments',
-    ocrOutputFolderMode: 'custom', // 'custom', 'obsidian-settings', 'vaultkeeper', 'source'
+    ocrWatchFolderName: '_files',
+    ocrOutputFolderMode: 'sibling-watch-folder', // 'custom', 'sibling-watch-folder', 'obsidian-settings', 'vaultkeeper', 'source'
     ocrOutputFolder: 'assets/attachments/ocr',
-    ocrOutputSubfolder: 'ocr', // appended to the resolved base for non-custom modes; '' = no subfolder
+    ocrSiblingOutputFolderName: '_ocr',
+    ocrOutputSubfolder: 'ocr', // appended to the resolved base for non-custom/non-sibling modes; '' = no subfolder
     ocrAutoProcess: true,
     ocrAutoProcessNewFiles: true,
     ocrAutoProcessModifiedFiles: true,
@@ -123,7 +126,8 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                             type: 'dropdown', key: 'organizationMode',
                             options: {
                                 'obsidian-settings': 'Use Obsidian settings',
-                                'same-location': 'Same location as file',
+                                'same-location': 'Same folder as current file',
+                                'same-location-subfolder': 'Custom folder within same folder as current file',
                                 'separate-folder': 'Separate folder'
                             }
                         }
@@ -139,6 +143,13 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                         }
                     },
                     {
+                        name: 'Folder within current file folder',
+                        desc: 'Relative folder created beside the linking note. Example: 02 - Journals/August/_files',
+                        aliases: ['relative attachment folder', 'same folder subfolder', '_files'],
+                        visible: () => s.organizationMode === 'same-location-subfolder',
+                        control: { type: 'text', key: 'sameLocationSubfolderName', placeholder: '_files' }
+                    },
+                    {
                         name: 'Default folder name',
                         desc: 'Pre-filled folder name shown in the organize prompt',
                         aliases: ['separate folder'],
@@ -148,7 +159,7 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                     {
                         name: 'Sort into subfolders by',
                         desc: 'Sort attachments into subfolders inside the destination',
-                        visible: () => s.organizationMode !== 'same-location',
+                        visible: () => !['same-location', 'same-location-subfolder'].includes(s.organizationMode),
                         control: {
                             type: 'dropdown', key: 'autoOrganizeMode',
                             options: {
@@ -163,7 +174,7 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                         name: 'Custom subfolder pattern',
                         desc: 'Available tokens: {{year}}, {{month}}, {{day}}, {{type}}, {{filename}}',
                         aliases: ['organize pattern', 'subfolder template'],
-                        visible: () => s.autoOrganizeMode === 'custom' && s.organizationMode !== 'same-location',
+                        visible: () => s.autoOrganizeMode === 'custom' && !['same-location', 'same-location-subfolder'].includes(s.organizationMode),
                         control: { type: 'text', key: 'customPattern', placeholder: '{{type}}/{{year}}-{{month}}' }
                     },
                     {
@@ -234,6 +245,20 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                 heading: 'OCR',
                 items: [
                     {
+                        name: 'Test connection',
+                        desc: 'Verify the custom OCR server and selected model',
+                        aliases: ['test custom server', 'connection test'],
+                        visible: () => s.ocrProvider === 'custom',
+                        render: (setting) => {
+                            setting.setName('Test connection')
+                                .setDesc('Verify the custom OCR server and selected model')
+                                .addButton(btn => btn
+                                    .setButtonText('Test connection')
+                                    .setCta()
+                                    .onClick(() => this.plugin.testCustomOcrServer()));
+                        }
+                    },
+                    {
                         name: 'Enable OCR',
                         desc: 'Extract text from images and PDFs using an AI model',
                         aliases: ['optical character recognition', 'gemini', 'openai', 'anthropic', 'ollama', 'image text'],
@@ -293,20 +318,6 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                         visible: () => s.ocrEnabled && s.ocrProvider === 'custom',
                         control: { type: 'slider', key: 'ocrCustomTimeout', min: 30, max: 1800, step: 30 }
                     },
-                    {
-                        name: 'Test custom server',
-                        desc: 'Check that the base URL responds and the model is available',
-                        aliases: ['test connection'],
-                        visible: () => s.ocrEnabled && s.ocrProvider === 'custom',
-                        render: (setting) => {
-                            setting.setName('Test custom server')
-                                .setDesc('Check that the base URL responds and the model is available')
-                                .addButton(btn => btn
-                                    .setButtonText('Test connection')
-                                    .onClick(() => this.plugin.testCustomOcrServer()));
-                        }
-                    },
-
                     // --- OpenAI ---
                     {
                         name: 'OpenAI API key',
@@ -415,6 +426,7 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                             type: 'dropdown', key: 'ocrWatchFolderMode',
                             options: {
                                 'custom': 'A specific folder',
+                                'folder-name': 'Any folder with a specific name',
                                 'obsidian-settings': "Obsidian's attachment folder",
                                 'vaultkeeper': "Vaultkeeper's organize destination"
                             }
@@ -428,9 +440,16 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                         control: { type: 'text', key: 'ocrWatchFolder', placeholder: 'assets/attachments' }
                     },
                     {
+                        name: 'Watch folder name',
+                        desc: 'Monitor every folder with this exact name anywhere in the vault, including its subfolders',
+                        aliases: ['any _files folder', 'folder name watcher'],
+                        visible: () => s.ocrEnabled && s.ocrWatchFolderMode === 'folder-name',
+                        control: { type: 'text', key: 'ocrWatchFolderName', placeholder: '_files' }
+                    },
+                    {
                         name: 'Resolved watch folder',
                         desc: 'Read-only preview',
-                        visible: () => s.ocrEnabled && s.ocrWatchFolderMode !== 'custom',
+                        visible: () => s.ocrEnabled && ['obsidian-settings', 'vaultkeeper'].includes(s.ocrWatchFolderMode),
                         render: (setting) => {
                             setting.setName('Resolved watch folder')
                                 .setDesc(this.plugin.getOcrWatchFolder() || '(vault root)');
@@ -444,6 +463,7 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                         control: {
                             type: 'dropdown', key: 'ocrOutputFolderMode',
                             options: {
+                                'sibling-watch-folder': 'Sibling folder next to watched folder',
                                 'custom': 'A specific folder',
                                 'source': 'Same folder as the source file',
                                 'obsidian-settings': "Obsidian's attachment folder",
@@ -459,10 +479,17 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                         control: { type: 'text', key: 'ocrOutputFolder', placeholder: 'assets/attachments/ocr' }
                     },
                     {
+                        name: 'Sibling OCR folder name',
+                        desc: 'When a source is inside a watched folder, save its OCR note in this sibling folder while preserving any nested path. Example: August/_files/document.pdf → August/_ocr/document (OCR).md',
+                        aliases: ['sibling ocr folder', '_ocr', 'ocr sibling folder'],
+                        visible: () => s.ocrEnabled && s.ocrOutputFolderMode === 'sibling-watch-folder',
+                        control: { type: 'text', key: 'ocrSiblingOutputFolderName', placeholder: '_ocr' }
+                    },
+                    {
                         name: 'Output subfolder',
                         desc: 'Subfolder appended to the resolved output location. Leave empty to write notes directly there.',
                         aliases: ['ocr subfolder'],
-                        visible: () => s.ocrEnabled && s.ocrOutputFolderMode !== 'custom',
+                        visible: () => s.ocrEnabled && !['custom', 'sibling-watch-folder'].includes(s.ocrOutputFolderMode),
                         control: { type: 'text', key: 'ocrOutputSubfolder', placeholder: 'ocr' }
                     },
                 ],
@@ -999,13 +1026,19 @@ module.exports = class AttachmentOrganizer extends Plugin {
         // OCR Commands
         this.addCommand({
             id: 'ocr-watch-folder',
-            name: 'OCR: Process watch folder',
+            name: 'OCR: Process all files (new + existing)',
             callback: () => this.ocrWatchFolder()
         });
 
         this.addCommand({
+            id: 'ocr-process-new',
+            name: 'OCR: Process new files only',
+            callback: () => this.ocrProcessNew()
+        });
+
+        this.addCommand({
             id: 'ocr-reprocess-all',
-            name: 'OCR: Reprocess all files (force update)',
+            name: 'OCR: Re-process existing files',
             callback: () => this.ocrReprocessAll()
         });
 
@@ -1180,11 +1213,27 @@ module.exports = class AttachmentOrganizer extends Plugin {
             }
 
             try {
-                const newPath = this.getNewAttachmentPath(file, resolvedFolderName);
+                // Capture both resolved and broken references before moving.
+                // Broken references are common after an older organize pass put
+                // an attachment in a root-level _files folder.
+                const references = await this.findAttachmentReferencesAsync(file);
+                const ownerNote = references[0]?.noteFile || null;
+                const newPath = this.getNewAttachmentPath(file, resolvedFolderName, ownerNote);
                 if (newPath !== file.path) {
                     const oldFolder = file.parent?.path || '';
                     await this.ensureFolderExists(newPath.substring(0, newPath.lastIndexOf('/')));
-                    await this.app.vault.rename(file, newPath);
+
+                    // fileManager.renameFile updates normal Obsidian backlinks;
+                    // vault.rename does not. Fall back only for older APIs.
+                    if (this.app.fileManager?.renameFile) {
+                        await this.app.fileManager.renameFile(file, newPath);
+                    } else {
+                        await this.app.vault.rename(file, newPath);
+                    }
+
+                    // Repair links that were already broken before the move, so
+                    // they could not be updated automatically by Obsidian.
+                    await this.repairAttachmentReferences(references, file);
                     organized++;
                     // Remove old folder (and empty ancestors) if now empty
                     if (oldFolder) {
@@ -1244,22 +1293,426 @@ module.exports = class AttachmentOrganizer extends Plugin {
         return cfg.replace(/^\/+|\/+$/g, '');
     }
 
-    // Folder of the first note that links to `file`, or null when nothing
-    // links to it. '' is a valid result (note lives at the vault root).
-    getLinkingNoteFolder(file) {
-        const resolvedLinks = this.app.metadataCache.resolvedLinks;
+    normalizeAttachmentLinkTarget(target) {
+        let value = String(target || '').trim().replace(/\\/g, '/');
+        // Strip common link decorations while keeping the actual file target.
+        if (value.startsWith('<') && value.endsWith('>')) value = value.slice(1, -1);
+        value = value.split('|')[0].split('#')[0].split('^')[0].trim();
+        try { value = decodeURIComponent(value); } catch (_) { /* leave as-is */ }
+        return value.replace(/^\.\//, '').replace(/^\/+/, '');
+    }
+
+    attachmentLinkMatchesFile(target, file) {
+        const normalized = this.normalizeAttachmentLinkTarget(target);
+        if (!normalized) return false;
+        const filename = normalized.split('/').pop() || '';
+        const fileName = (file.name || '').toLowerCase();
+        const fileBase = (file.basename || '').toLowerCase();
+        const candidate = filename.toLowerCase();
+        if (candidate === fileName) return true;
+        // Obsidian wiki links are allowed to omit the extension.
+        return !candidate.includes('.') && candidate === fileBase;
+    }
+
+    // Return all markdown notes that appear to reference an attachment. This
+    // intentionally includes unresolved/broken links. That matters when an
+    // attachment has already been moved into the wrong root-level _files
+    // folder: metadataCache.resolvedLinks can no longer connect the journal
+    // note to the physical file, but the broken embed still contains the same
+    // filename and tells us which note owns it.
+    findAttachmentReferences(file) {
+        const byPath = new Map();
+        const add = (noteFile, score, target, occurrence) => {
+            if (!(noteFile instanceof TFile) || noteFile.extension !== 'md') return;
+            let entry = byPath.get(noteFile.path);
+            if (!entry) {
+                entry = { noteFile, score, targets: new Set(), occurrences: [] };
+                byPath.set(noteFile.path, entry);
+            }
+            entry.score = Math.min(entry.score, score);
+            if (target) entry.targets.add(target);
+            if (occurrence) entry.occurrences.push(occurrence);
+        };
+
+        const resolvedLinks = this.app.metadataCache.resolvedLinks || {};
         for (const [notePath, links] of Object.entries(resolvedLinks)) {
             if (links[file.path] === undefined) continue;
             const noteFile = this.app.vault.getAbstractFileByPath(notePath);
-            if (noteFile instanceof TFile) {
-                return noteFile.parent?.path ?? '';
+            add(noteFile, 0, file.path, null);
+        }
+
+        const unresolvedLinks = this.app.metadataCache.unresolvedLinks || {};
+        for (const [notePath, links] of Object.entries(unresolvedLinks)) {
+            const noteFile = this.app.vault.getAbstractFileByPath(notePath);
+            if (!(noteFile instanceof TFile) || noteFile.extension !== 'md') continue;
+            for (const target of Object.keys(links || {})) {
+                if (this.attachmentLinkMatchesFile(target, file)) add(noteFile, 10, target, null);
             }
         }
-        return null;
+
+        // Scan cached link/embed entries as a second source of truth. This also
+        // gives us source positions so broken links can be repaired after move.
+        const markdownFiles = typeof this.app.vault.getMarkdownFiles === 'function'
+            ? this.app.vault.getMarkdownFiles()
+            : this.app.vault.getFiles().filter(f => f instanceof TFile && f.extension === 'md');
+        for (const noteFile of markdownFiles) {
+            const cache = this.app.metadataCache.getFileCache?.(noteFile);
+            if (!cache) continue;
+            for (const item of [...(cache.links || []), ...(cache.embeds || [])]) {
+                if (!this.attachmentLinkMatchesFile(item.link, file)) continue;
+                const pos = item.position;
+                const occurrence = pos?.start?.offset !== undefined && pos?.end?.offset !== undefined
+                    ? { start: pos.start.offset, end: pos.end.offset, target: item.link }
+                    : null;
+                const exactCurrentPath = this.normalizeAttachmentLinkTarget(item.link).toLowerCase() === (file.path || '').toLowerCase();
+                add(noteFile, exactCurrentPath ? 1 : 12, item.link, occurrence);
+            }
+        }
+
+        const activeFile = this.app.workspace?.getActiveFile?.();
+        const relativeFolder = this.getSameLocationSubfolderName();
+        const entries = [...byPath.values()];
+        for (const entry of entries) {
+            const note = entry.noteFile;
+            if (activeFile?.path === note.path) entry.score -= 5;
+            if (note.name.includes('(OCR)') || note.name.includes('OCR Result')) entry.score += 100;
+            if (relativeFolder && (note.parent?.path || '').split('/').includes(relativeFolder)) entry.score += 20;
+        }
+        entries.sort((a, b) => a.score - b.score || a.noteFile.path.localeCompare(b.noteFile.path));
+        return entries;
     }
 
-    getNewAttachmentPath(file, resolvedFolderName) {
+    // Some Obsidian attachment owners are not Markdown notes. Canvas files can
+    // contain file nodes and Bases can contain file/link values, and the
+    // metadata cache does not expose those references consistently. When the
+    // fast Markdown/cache lookup finds nothing, read Obsidian's text-based
+    // reference files directly so Organization can still determine the file
+    // that owns an attachment. This also covers a temporarily stale Markdown
+    // cache immediately after a file is created or moved.
+    async findAttachmentReferencesAsync(file) {
+        // Do not stop after the metadata-cache pass. A cached reference can be
+        // stale or can point at an asset/helper note inside _files while the
+        // real owning note is a Canvas/Base/Markdown file elsewhere. Merge all
+        // sources of evidence and choose the best owner after scoring them.
+        const byPath = new Map();
+        const mergeEntry = (entry) => {
+            const sourceFile = entry?.noteFile;
+            if (!(sourceFile instanceof TFile) || sourceFile.path === file.path) return;
+            let current = byPath.get(sourceFile.path);
+            if (!current) {
+                current = {
+                    noteFile: sourceFile,
+                    score: Number.isFinite(entry.score) ? entry.score : 999,
+                    targets: new Set(),
+                    occurrences: []
+                };
+                byPath.set(sourceFile.path, current);
+            } else if (Number.isFinite(entry.score)) {
+                current.score = Math.min(current.score, entry.score);
+            }
+            for (const target of entry.targets || []) current.targets.add(target);
+            for (const occurrence of entry.occurrences || []) current.occurrences.push(occurrence);
+        };
+
+        for (const entry of this.findAttachmentReferences(file)) mergeEntry(entry);
+
+        const sourceFiles = this.app.vault.getFiles().filter(source => {
+            if (!(source instanceof TFile) || source.path === file.path) return false;
+            const ext = (source.extension || '').toLowerCase();
+            return ext === 'md' || ext === 'canvas' || ext === 'base';
+        });
+
+        for (const sourceFile of sourceFiles) {
+            let content = '';
+            try {
+                if (typeof this.app.vault.cachedRead === 'function') {
+                    content = await this.app.vault.cachedRead(sourceFile);
+                } else {
+                    content = await this.app.vault.read(sourceFile);
+                }
+            } catch (_) {
+                continue;
+            }
+
+            const matches = this.findAttachmentTargetsInText(content, file, sourceFile);
+            if (matches.length === 0) continue;
+
+            let score = Math.min(...matches.map(match => match.score));
+            const activeFile = this.app.workspace?.getActiveFile?.();
+            if (activeFile?.path === sourceFile.path) score -= 5;
+            if (sourceFile.name.includes('(OCR)') || sourceFile.name.includes('OCR Result')) score += 100;
+            const relativeFolder = this.getSameLocationSubfolderName();
+            if (relativeFolder && (sourceFile.parent?.path || '').split('/').includes(relativeFolder)) score += 20;
+
+            mergeEntry({
+                noteFile: sourceFile,
+                score,
+                targets: new Set(matches.map(match => match.target).filter(Boolean)),
+                occurrences: matches
+                    .filter(match => Number.isInteger(match.start) && Number.isInteger(match.end))
+                    .map(match => ({ start: match.start, end: match.end, target: match.target }))
+            });
+        }
+
+        // Last-resort ownership inference for Vaultkeeper/File Creator style
+        // names such as "Home_original.png" or
+        // "20 - Thursday_attachmentName.png". Filename inference must NEVER
+        // outrank an actual reference from a real note/canvas/base outside the
+        // attachment folder. A file called Home_original.png can legitimately
+        // be embedded by a journal entry; in that case the journal is the owner
+        // even though a root Home.md also exists.
+        //
+        // Only use the naming fallback when there is no concrete owner outside
+        // the organized attachment folder (or when all concrete candidates are
+        // helper/stale references living inside that folder).
+        const relativeFolder = this.getSameLocationSubfolderName();
+        const concreteEntries = [...byPath.values()];
+        const hasConcreteOwnerOutsideAttachmentFolder = concreteEntries.some(entry => {
+            const source = entry.noteFile;
+            if (!(source instanceof TFile)) return false;
+            const sourceFolderParts = (source.parent?.path || '').split('/').filter(Boolean);
+            const inAttachmentFolder = relativeFolder && sourceFolderParts.includes(relativeFolder);
+            const looksGeneratedOcr = source.name.includes('(OCR)') || source.name.includes('OCR Result');
+            return !inAttachmentFolder && !looksGeneratedOcr;
+        });
+
+        if (!hasConcreteOwnerOutsideAttachmentFolder) {
+            const inferred = this.inferAttachmentOwnerByFilename(file, sourceFiles);
+            if (inferred) mergeEntry(inferred);
+        }
+
+        const entries = [...byPath.values()];
+        entries.sort((a, b) => a.score - b.score || a.noteFile.path.localeCompare(b.noteFile.path));
+        return entries;
+    }
+
+    inferAttachmentOwnerByFilename(file, sourceFiles = null) {
+        const attachmentBase = String(file?.basename || '').trim();
+        if (!attachmentBase) return null;
+
+        const ownerNames = new Set();
+        const addOwnerName = value => {
+            const name = String(value || '').trim();
+            if (name && name !== attachmentBase) ownerNames.add(name.toLowerCase());
+        };
+
+        // File Creator's common generated-file suffix.
+        if (/_original(?:[_-].*)?$/i.test(attachmentBase)) {
+            addOwnerName(attachmentBase.replace(/_original(?:[_-].*)?$/i, ''));
+        }
+        // User-configured journal convention: <note>_attachmentName.ext
+        if (/_attachment(?:[_-]?.*)?$/i.test(attachmentBase)) {
+            addOwnerName(attachmentBase.replace(/_attachment(?:[_-]?.*)?$/i, ''));
+        }
+
+        if (ownerNames.size === 0) return null;
+
+        const files = sourceFiles || this.app.vault.getFiles().filter(source => {
+            if (!(source instanceof TFile) || source.path === file.path) return false;
+            const ext = (source.extension || '').toLowerCase();
+            return ext === 'md' || ext === 'canvas' || ext === 'base';
+        });
+        const matches = files.filter(source => ownerNames.has(String(source.basename || '').toLowerCase()));
+        if (matches.length === 0) return null;
+
+        const folders = new Map();
+        for (const source of matches) {
+            const folder = source.parent?.path ?? '';
+            if (!folders.has(folder)) folders.set(folder, []);
+            folders.get(folder).push(source);
+        }
+        if (folders.size !== 1) return null;
+
+        const activeFile = this.app.workspace?.getActiveFile?.();
+        const sameFolderMatches = [...folders.values()][0];
+        sameFolderMatches.sort((a, b) => {
+            if (activeFile?.path === a.path) return -1;
+            if (activeFile?.path === b.path) return 1;
+            const rank = ext => ext === 'md' ? 0 : ext === 'canvas' ? 1 : 2;
+            return rank((a.extension || '').toLowerCase()) - rank((b.extension || '').toLowerCase()) || a.path.localeCompare(b.path);
+        });
+
+        const owner = sameFolderMatches[0];
+        // A unique filename-derived owner is intentional naming evidence, not
+        // a loose text match, so prefer it over stale cache references.
+        let score = -8;
+        if (activeFile?.path === owner.path) score -= 5;
+        return { noteFile: owner, score, targets: new Set(), occurrences: [] };
+    }
+
+    // Extract link/path targets from Markdown, Canvas JSON, and Base text.
+    // Scores prefer an exact vault path over a filename-only match so duplicate
+    // attachment names are less likely to be assigned to the wrong owner.
+    findAttachmentTargetsInText(content, file, sourceFile) {
+        const text = String(content || '');
+        const matches = [];
+        const seen = new Set();
+        const add = (target, score, start = null, end = null) => {
+            if (!target || !this.attachmentLinkMatchesFile(target, file)) return;
+            const normalized = this.normalizeAttachmentLinkTarget(target).toLowerCase();
+            const exactPath = normalized === String(file.path || '').toLowerCase();
+            const key = `${target}\u0000${start ?? ''}\u0000${end ?? ''}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            matches.push({ target, score: exactPath ? Math.min(score, 2) : score, start, end });
+        };
+
+        // Wiki links / embeds. The offsets cover the whole construct so broken
+        // Markdown links can be repaired after the attachment is moved.
+        const wikiRe = /!?\[\[([^\]]+)\]\]/g;
+        let m;
+        while ((m = wikiRe.exec(text)) !== null) {
+            add(m[1], 6, m.index, m.index + m[0].length);
+        }
+
+        // Standard Markdown links / embeds.
+        const markdownRe = /!?\[[^\]]*\]\((?:<([^>]+)>|([^\s)]+))(?:\s+["'][^"']*["'])?\)/g;
+        while ((m = markdownRe.exec(text)) !== null) {
+            add(m[1] || m[2], 6, m.index, m.index + m[0].length);
+        }
+
+        const ext = (sourceFile?.extension || '').toLowerCase();
+        if (ext === 'canvas') {
+            // Canvas stores file nodes as JSON strings such as
+            // {"type":"file","file":"path/to/image.png"}. Walk every
+            // string value because plugins may add equivalent custom node data.
+            try {
+                const parsed = JSON.parse(text);
+                const visit = value => {
+                    if (typeof value === 'string') {
+                        add(value, 4);
+                    } else if (Array.isArray(value)) {
+                        value.forEach(visit);
+                    } else if (value && typeof value === 'object') {
+                        Object.values(value).forEach(visit);
+                    }
+                };
+                visit(parsed);
+            } catch (_) {
+                // A partially-written canvas can briefly be invalid JSON. The
+                // exact-path fallback below still gives Organization a chance.
+            }
+        }
+
+        // Base files are YAML-like text and Canvas/Markdown can be temporarily
+        // incomplete while Obsidian is saving. Exact path strings are safe
+        // fallback evidence. Filename-only evidence is deliberately weaker and
+        // only used because this function itself is called after cache lookup
+        // found no reference at all.
+        const pathCandidates = [file.path, encodeURI(file.path || '')].filter(Boolean);
+        for (const candidate of pathCandidates) {
+            let idx = text.indexOf(candidate);
+            while (idx !== -1) {
+                add(candidate, 3, idx, idx + candidate.length);
+                idx = text.indexOf(candidate, idx + candidate.length);
+            }
+        }
+
+        const filename = file.name || '';
+        // Only fall back to a bare filename when no structured link or exact
+        // path was found. Otherwise the filename is a substring of the stronger
+        // target and repairing both could rewrite the replacement path twice.
+        if (filename && matches.length === 0) {
+            let idx = text.indexOf(filename);
+            while (idx !== -1) {
+                add(filename, 25, idx, idx + filename.length);
+                idx = text.indexOf(filename, idx + filename.length);
+            }
+        }
+
+        return matches;
+    }
+
+    // Folder of the best file that links to `file`, or null when nothing links
+    // to it. Historically this returned only Markdown notes; callers keep the
+    // old method name for compatibility, while Organization uses the async
+    // resolver above so Canvas/Base ownership is included.
+    getLinkingNoteFile(file) {
+        return this.findAttachmentReferences(file)[0]?.noteFile || null;
+    }
+
+    getLinkingNoteFolder(file) {
+        const noteFile = this.getLinkingNoteFile(file);
+        return noteFile ? (noteFile.parent?.path ?? '') : null;
+    }
+
+    getGeneratedLinkTarget(file, sourceNote) {
+        try {
+            const generated = this.app.fileManager?.generateMarkdownLink?.(file, sourceNote.path);
+            if (generated) {
+                const wiki = generated.match(/\[\[([^\]|#^]+)(?:[|#^][^\]]*)?\]\]/);
+                if (wiki?.[1]) return wiki[1];
+                const markdown = generated.match(/\]\((?:<([^>]+)>|([^\s)]+))(?:\s+["'][^"']*["'])?\)$/);
+                if (markdown?.[1] || markdown?.[2]) return markdown[1] || markdown[2];
+            }
+        } catch (error) {
+            console.warn('Vaultkeeper: could not generate replacement attachment link', error);
+        }
+        return file.path;
+    }
+
+    async repairAttachmentReferences(referenceEntries, movedFile) {
+        let repaired = 0;
+        for (const entry of referenceEntries) {
+            if (!entry.targets?.size) continue;
+            const noteFile = this.app.vault.getAbstractFileByPath(entry.noteFile.path);
+            if (!(noteFile instanceof TFile)) continue;
+            let content;
+            try { content = await this.app.vault.read(noteFile); }
+            catch (_) { continue; }
+
+            const replacementTarget = noteFile.extension === 'md'
+                ? this.getGeneratedLinkTarget(movedFile, noteFile)
+                : movedFile.path;
+            let updated = content;
+
+            // Prefer parser offsets because they only touch actual links/embeds,
+            // not matching text elsewhere in the note.
+            const occurrences = [...(entry.occurrences || [])]
+                .filter(o => Number.isInteger(o.start) && Number.isInteger(o.end))
+                .sort((a, b) => b.start - a.start);
+            for (const occurrence of occurrences) {
+                if (occurrence.start < 0 || occurrence.end > updated.length || occurrence.start >= occurrence.end) continue;
+                const segment = updated.slice(occurrence.start, occurrence.end);
+                if (!segment.includes(occurrence.target)) continue;
+                const changed = segment.replace(occurrence.target, replacementTarget);
+                if (changed !== segment) {
+                    updated = updated.slice(0, occurrence.start) + changed + updated.slice(occurrence.end);
+                }
+            }
+
+            // If cache offsets were unavailable/stale, repair the common wiki
+            // and Markdown target forms using the exact broken target strings.
+            for (const target of entry.targets) {
+                if (!target || target === movedFile.path) continue;
+                const esc = target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                updated = updated.replace(new RegExp(`(\\[\\[)${esc}(?=(?:[|#^\\]]))`, 'g'), `$1${replacementTarget}`);
+                updated = updated.replace(new RegExp(`(\\]\\(<?)${esc}(?=(?:>|\\)|\\s))`, 'g'), `$1${replacementTarget}`);
+            }
+
+            if (updated !== content) {
+                try {
+                    await this.app.vault.modify(noteFile, updated);
+                    repaired++;
+                } catch (error) {
+                    console.warn(`Vaultkeeper: failed to repair links in ${noteFile.path}`, error);
+                }
+            }
+        }
+        return repaired;
+    }
+
+    getSameLocationSubfolderName() {
+        const raw = (this.settings.sameLocationSubfolderName || '_files').trim().replace(/\\/g, '/');
+        const safeSegments = raw.split('/').filter(part => part && part !== '.' && part !== '..');
+        return safeSegments.join('/') || '_files';
+    }
+
+    getNewAttachmentPath(file, resolvedFolderName, linkingNoteFileOverride = null) {
         let baseFolder;
+        const linkingNoteFolderOverride = linkingNoteFileOverride
+            ? (linkingNoteFileOverride.parent?.path ?? '')
+            : null;
 
         if (this.settings.organizationMode === 'obsidian-settings') {
             // Note-relative forms of the Obsidian setting need to know which
@@ -1269,7 +1722,9 @@ module.exports = class AttachmentOrganizer extends Plugin {
             const isNoteRelative = !cfg || cfg === '.' || cfg.startsWith('./');
             let noteFolder = null;
             if (isNoteRelative && cfg !== '') {
-                noteFolder = this.getLinkingNoteFolder(file);
+                noteFolder = linkingNoteFolderOverride !== null
+                    ? linkingNoteFolderOverride
+                    : this.getLinkingNoteFolder(file);
                 if (noteFolder === null) return file.path;
             }
             baseFolder = this.resolveObsidianAttachmentFolder(noteFolder ?? '');
@@ -1278,9 +1733,23 @@ module.exports = class AttachmentOrganizer extends Plugin {
             // else. Subfolder sorting deliberately does not apply here, and an
             // attachment nothing links to stays exactly where it is instead of
             // being swept into a folder at the vault root.
-            const linkingNoteFolder = this.getLinkingNoteFolder(file);
+            const linkingNoteFolder = linkingNoteFolderOverride !== null
+                ? linkingNoteFolderOverride
+                : this.getLinkingNoteFolder(file);
             if (linkingNoteFolder === null) return file.path;
             return linkingNoteFolder ? `${linkingNoteFolder}/${file.name}` : file.name;
+        } else if (this.settings.organizationMode === 'same-location-subfolder') {
+            // Keep each attachment beside its linking note, but inside a custom
+            // relative folder such as "_files". Example:
+            // 02 - Journals/August/20 - Thursday.md
+            // -> 02 - Journals/August/_files/<attachment>.png
+            const linkingNoteFolder = linkingNoteFolderOverride !== null
+                ? linkingNoteFolderOverride
+                : this.getLinkingNoteFolder(file);
+            if (linkingNoteFolder === null) return file.path;
+            const subfolder = this.getSameLocationSubfolderName();
+            const targetFolder = linkingNoteFolder ? `${linkingNoteFolder}/${subfolder}` : subfolder;
+            return `${targetFolder}/${file.name}`;
         } else {
             // separate-folder: use the resolved (prompted) folder name
             baseFolder = resolvedFolderName || this.settings.separateFolderName || 'attachments';
@@ -1384,29 +1853,10 @@ module.exports = class AttachmentOrganizer extends Plugin {
     }
 
     async findUnlinkedAttachments() {
-        const files = this.app.vault.getFiles();
-        const attachmentExtensions = this.settings.attachmentExtensions.split(',').map(ext => ext.trim().toLowerCase());
-        const attachments = files.filter(file => attachmentExtensions.includes(file.extension?.toLowerCase()));
-        
-        const linkedAttachments = new Set();
-        const markdownFiles = files.filter(file => file.extension === 'md');
+        // Use the same async resolver as Organization so Canvas/Base references
+        // and temporarily stale Markdown cache entries count as real links.
+        const unlinkedAttachments = await this.getUnlinkedAttachments();
 
-        for (const mdFile of markdownFiles) {
-            const content = await this.app.vault.read(mdFile);
-            const linkRegex = /\[\[([^\]]+)\]\]|!\[\[([^\]]+)\]\]/g;
-            let match;
-            
-            while ((match = linkRegex.exec(content)) !== null) {
-                const linkedFile = match[1] || match[2];
-                const resolvedFile = this.app.metadataCache.getFirstLinkpathDest(linkedFile, mdFile.path);
-                if (resolvedFile) {
-                    linkedAttachments.add(resolvedFile.path);
-                }
-            }
-        }
-
-        const unlinkedAttachments = attachments.filter(file => !linkedAttachments.has(file.path));
-        
         if (unlinkedAttachments.length === 0) {
             new Notice('No unlinked attachments found');
             return;
@@ -1414,7 +1864,7 @@ module.exports = class AttachmentOrganizer extends Plugin {
 
         const list = unlinkedAttachments.map(file => `- ${file.path}`).join('\n');
         const content = `# Unlinked Attachments\n\nFound ${unlinkedAttachments.length} unlinked attachments:\n\n${list}`;
-        
+
         await this.app.workspace.openLinkText('Unlinked Attachments Report', '', true);
         const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
         if (activeView) {
@@ -1426,24 +1876,15 @@ module.exports = class AttachmentOrganizer extends Plugin {
         const files = this.app.vault.getFiles();
         const attachmentExtensions = this.settings.attachmentExtensions.split(',').map(ext => ext.trim().toLowerCase());
         const attachments = files.filter(file => attachmentExtensions.includes(file.extension?.toLowerCase()));
-
         const ignoreFolders = this.settings.ignoreFolders.split(',').map(f => f.trim()).filter(f => f);
+        const unlinked = [];
 
-        const linkedAttachments = new Set();
-        const markdownFiles = files.filter(file => file.extension === 'md');
-
-        for (const mdFile of markdownFiles) {
-            const resolvedLinks = this.app.metadataCache.resolvedLinks[mdFile.path] || {};
-            for (const destPath of Object.keys(resolvedLinks)) {
-                linkedAttachments.add(destPath);
-            }
+        for (const file of attachments) {
+            if (ignoreFolders.some(folder => file.path.startsWith(folder + '/'))) continue;
+            const references = await this.findAttachmentReferencesAsync(file);
+            if (references.length === 0) unlinked.push(file);
         }
-
-        return attachments.filter(file => {
-            if (linkedAttachments.has(file.path)) return false;
-            if (ignoreFolders.some(folder => file.path.startsWith(folder + '/'))) return false;
-            return true;
-        });
+        return unlinked;
     }
 
     async purgeUnlinkedAttachments() {
@@ -1599,6 +2040,14 @@ module.exports = class AttachmentOrganizer extends Plugin {
         } else if (mode === 'same-location') {
             const noteFolder = sourceFile ? this.getLinkingNoteFolder(sourceFile) : null;
             return noteFolder ?? this.stripOrganizedSuffix(sourceFile?.parent?.path || '');
+        } else if (mode === 'same-location-subfolder') {
+            const subfolder = this.getSameLocationSubfolderName();
+            const noteFolder = sourceFile ? this.getLinkingNoteFolder(sourceFile) : null;
+            if (noteFolder !== null) return noteFolder ? `${noteFolder}/${subfolder}` : subfolder;
+            if (!sourceFile) return subfolder;
+            const currentFolder = this.stripOrganizedSuffix(sourceFile.parent?.path || '');
+            if (currentFolder === subfolder || currentFolder.endsWith('/' + subfolder)) return currentFolder;
+            return currentFolder ? `${currentFolder}/${subfolder}` : subfolder;
         } else {
             base = this.settings.separateFolderName || 'attachments';
         }
@@ -1643,16 +2092,68 @@ module.exports = class AttachmentOrganizer extends Plugin {
                 return trim(this.resolveObsidianAttachmentFolder(''));
             case 'vaultkeeper':
                 return trim(this.getVaultkeeperOrganizeFolder(null));
+            case 'folder-name':
+                return trim(this.settings.ocrWatchFolderName || '_files');
             default:
                 return trim(this.settings.ocrWatchFolder);
         }
     }
 
     isInOcrWatchFolder(file) {
+        if (this.settings.ocrWatchFolderMode === 'folder-name') {
+            const targetName = (this.settings.ocrWatchFolderName || '_files').trim().replace(/^\/+|\/+$/g, '');
+            if (!targetName) return false;
+            const folderPath = file?.parent?.path || '';
+            // Match an exact folder segment anywhere in the path so nested
+            // content under any `_files` folder is included too.
+            return folderPath.split('/').includes(targetName);
+        }
+
         const watchFolder = this.getOcrWatchFolder();
         // Empty watch folder = watch the entire vault.
         if (!watchFolder) return true;
         return file.path.startsWith(watchFolder + '/') || file.path === watchFolder;
+    }
+
+    getOcrSiblingOutputFolder(sourceFile) {
+        const trim = (p) => (p || '').replace(/^\/+|\/+$/g, '');
+        const outputName = trim(this.settings.ocrSiblingOutputFolderName || '_ocr') || '_ocr';
+        const sourceParent = trim(sourceFile?.parent?.path || '');
+        const sourceSegments = sourceParent ? sourceParent.split('/') : [];
+
+        // When watching every folder with a specific name (normally `_files`),
+        // replace the nearest matching folder segment with the sibling OCR
+        // folder and preserve any nested path below it.
+        if (this.settings.ocrWatchFolderMode === 'folder-name') {
+            const watchName = trim(this.settings.ocrWatchFolderName || '_files');
+            if (watchName) {
+                const index = sourceSegments.lastIndexOf(watchName);
+                if (index !== -1) {
+                    const mapped = [
+                        ...sourceSegments.slice(0, index),
+                        outputName,
+                        ...sourceSegments.slice(index + 1),
+                    ];
+                    return mapped.join('/');
+                }
+            }
+        }
+
+        // For a single resolved watch-folder path, mirror the relative path
+        // below that watched folder into a sibling `_ocr` folder.
+        const watchFolder = trim(this.getOcrWatchFolder());
+        if (watchFolder && (sourceParent === watchFolder || sourceParent.startsWith(watchFolder + '/'))) {
+            const slash = watchFolder.lastIndexOf('/');
+            const watchParent = slash === -1 ? '' : watchFolder.slice(0, slash);
+            const relative = sourceParent === watchFolder ? '' : sourceParent.slice(watchFolder.length + 1);
+            const siblingBase = watchParent ? `${watchParent}/${outputName}` : outputName;
+            return relative ? `${siblingBase}/${relative}` : siblingBase;
+        }
+
+        // Commands such as "OCR: Process current file" can intentionally
+        // bypass the watch folder. In that case, keep the result near the
+        // source by using an `_ocr` child of its current folder.
+        return sourceParent ? `${sourceParent}/${outputName}` : outputName;
     }
 
     getOcrOutputFolder(sourceFile) {
@@ -1661,6 +2162,13 @@ module.exports = class AttachmentOrganizer extends Plugin {
 
         // A specific folder — used verbatim, no subfolder appended.
         if (mode === 'custom') return trim(this.settings.ocrOutputFolder);
+
+        // Mirror watched attachment folders into a sibling OCR folder.
+        // Example: 02 - Journals/August/_files/doc.pdf
+        //       -> 02 - Journals/August/_ocr/doc (OCR).md
+        if (mode === 'sibling-watch-folder') {
+            return this.getOcrSiblingOutputFolder(sourceFile);
+        }
 
         let base;
         if (mode === 'source') {
@@ -2108,7 +2616,7 @@ module.exports = class AttachmentOrganizer extends Plugin {
     // Runs OCR on one file and writes the note. `progress` is an existing
     // progress handle to reuse (batch runs share one notice); when omitted a
     // notice is created and closed here.
-    async processFileForOcr(file, progress = null) {
+    async processFileForOcr(file, progress = null, options = {}) {
         if (!(await this.isOcrConfigured())) {
             return;
         }
@@ -2126,7 +2634,8 @@ module.exports = class AttachmentOrganizer extends Plugin {
 
             const ocrPath = this.getOcrNotePath(file);
             const alreadyExists = await this.app.vault.adapter.exists(ocrPath);
-            if (alreadyExists && !this.settings.ocrForceReprocess) {
+            const forceReprocess = options.forceReprocess ?? this.settings.ocrForceReprocess;
+            if (alreadyExists && !forceReprocess) {
                 return;
             }
 
@@ -2162,25 +2671,26 @@ module.exports = class AttachmentOrganizer extends Plugin {
         }
     }
 
-    async ocrWatchFolder() {
+    async ocrProcessWatchFolder(mode = 'all') {
         if (!(await this.isOcrConfigured())) {
             new Notice(this.ocrConfigError(), 10000);
             return;
         }
 
-        // Reset stop flag
         this.ocrStopRequested = false;
 
-        let files = this.app.vault.getFiles().filter(f =>
+        const files = this.app.vault.getFiles().filter(f =>
             this.isInOcrWatchFolder(f) && this.isOcrTarget(f) && !this.isOcrOutputFile(f)
         );
 
         if (files.length === 0) {
-            new Notice('No images or PDFs found in watch folder');
+            const scope = this.settings.ocrWatchFolderMode === 'folder-name'
+                ? `folders named "${this.settings.ocrWatchFolderName || '_files'}"`
+                : 'watch folder';
+            new Notice(`No images or PDFs found in ${scope}`);
             return;
         }
 
-        // Filter files by size and existing OCR status
         const validFiles = [];
         for (const file of files) {
             const stat = await this.app.vault.adapter.stat(file.path);
@@ -2191,62 +2701,56 @@ module.exports = class AttachmentOrganizer extends Plugin {
 
             const ocrPath = this.getOcrNotePath(file);
             const ocrExists = await this.app.vault.adapter.exists(ocrPath);
-            
-            if (!ocrExists || this.settings.ocrForceReprocess) {
-                // Check if file was modified after OCR
-                if (ocrExists && !this.settings.ocrForceReprocess) {
-                    const ocrStat = await this.app.vault.adapter.stat(ocrPath);
-                    if (stat.mtime <= ocrStat.mtime) {
-                        continue; // OCR is newer than source file
-                    }
-                }
-                validFiles.push({ file, size: stat.size });
-            }
+            if (mode === 'new' && ocrExists) continue;
+            if (mode === 'existing' && !ocrExists) continue;
+
+            validFiles.push({ file, size: stat.size });
         }
 
         if (validFiles.length === 0) {
-            new Notice('No files need OCR processing');
+            const messages = {
+                new: 'No new files need OCR processing',
+                existing: 'No existing OCR files found to re-process',
+                all: 'No OCR-compatible files found to process',
+            };
+            new Notice(messages[mode] || messages.all);
             return;
         }
 
-        // Sort by file size (smallest first for better batching)
         validFiles.sort((a, b) => a.size - b.size);
 
         let processed = 0;
         let failed = 0;
-
-        // One notice for the whole run — it stays up until every file is done.
-        const progress = this.startOcrProgress(`Running OCR on ${validFiles.length} file${validFiles.length !== 1 ? 's' : ''} via ${this.getOcrProviderLabel()}...`);
+        const actionLabel = mode === 'new'
+            ? 'Processing new OCR files'
+            : mode === 'existing'
+                ? 'Re-processing existing OCR files'
+                : 'Processing all OCR files';
+        const progress = this.startOcrProgress(`${actionLabel}: ${validFiles.length} file${validFiles.length !== 1 ? 's' : ''} via ${this.getOcrProviderLabel()}...`);
+        const forceReprocess = mode === 'all' || mode === 'existing';
 
         try {
-            // Process in batches
             const batchSize = this.settings.ocrBatchSize;
             for (let i = 0; i < validFiles.length; i += batchSize) {
-                // Check if stop was requested
                 if (this.ocrStopRequested) {
                     progress.done(`OCR stopped. Processed: ${processed}, failed: ${failed}`);
                     return;
                 }
 
                 const batch = validFiles.slice(i, i + batchSize);
-
                 for (const { file } of batch) {
-                    // Check if stop was requested before processing each file
                     if (this.ocrStopRequested) {
                         progress.done(`OCR stopped. Processed: ${processed}, failed: ${failed}`);
                         return;
                     }
 
                     progress.setMessage(`OCR ${processed + failed + 1}/${validFiles.length}: ${file.name} via ${this.getOcrProviderLabel()}...`);
-
                     try {
-                        await this.processFileForOcr(file, progress);
+                        await this.processFileForOcr(file, progress, { forceReprocess });
                         processed++;
                     } catch (error) {
                         console.error(`Failed to process ${file.name}:`, error);
                         failed++;
-
-                        // Stop entire batch processing on quota exceeded
                         if (error.message.includes('QUOTA_EXCEEDED') || error.message.includes('API_ERROR_429')) {
                             progress.done(`OCR stopped: provider quota limit. Processed: ${processed}, failed: ${failed}`, 10000);
                             return;
@@ -2254,10 +2758,9 @@ module.exports = class AttachmentOrganizer extends Plugin {
                     }
                 }
 
-                // Longer delay between batches to avoid API rate limits
                 if (i + batchSize < validFiles.length) {
                     progress.setMessage(`Waiting between batches (${processed} done, ${failed} failed)...`);
-                    await new Promise(resolve => setTimeout(resolve, 10000)); // 10 second delay
+                    await new Promise(resolve => setTimeout(resolve, 10000));
                 }
             }
 
@@ -2267,22 +2770,16 @@ module.exports = class AttachmentOrganizer extends Plugin {
         }
     }
 
+    async ocrWatchFolder() {
+        return await this.ocrProcessWatchFolder('all');
+    }
+
+    async ocrProcessNew() {
+        return await this.ocrProcessWatchFolder('new');
+    }
+
     async ocrReprocessAll() {
-        if (!(await this.isOcrConfigured())) {
-            new Notice(this.ocrConfigError(), 10000);
-            return;
-        }
-
-        // Temporarily enable force reprocess
-        const originalForceReprocess = this.settings.ocrForceReprocess;
-        this.settings.ocrForceReprocess = true;
-
-        try {
-            await this.ocrWatchFolder();
-        } finally {
-            // Restore original setting
-            this.settings.ocrForceReprocess = originalForceReprocess;
-        }
+        return await this.ocrProcessWatchFolder('existing');
     }
 
     setupFileWatchers() {

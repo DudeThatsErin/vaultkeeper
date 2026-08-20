@@ -29,6 +29,7 @@ A comprehensive Obsidian plugin that organizes and manages attachments, renames 
 - Extract text from images (PNG, JPG, JPEG, WEBP, BMP, GIF, HEIC, HEIF) and PDFs
 - **Progress notice** stays on screen with an elapsed-time counter until the run finishes — self-hosted models can take minutes
 - Watch and output folders can follow Obsidian's attachment setting or Vaultkeeper's own organize destination
+- Route OCR notes to a sibling folder beside watched attachment folders (for example `_files` → `_ocr`) while preserving nested paths
 - **Custom note properties**: define whatever YAML frontmatter you want on OCR notes
 - Auto-process new files added to a watch folder
 - Auto-update OCR notes when source files are modified
@@ -54,7 +55,8 @@ A comprehensive Obsidian plugin that organizes and manages attachments, renames 
 1. Open **Settings > Attachment Organizer > Organization Settings**
 2. Set your **Destination**:
    - *Use Obsidian settings* — respects your vault's "Default location for new attachments" setting
-   - *Same location as file* — moves attachments to the same folder as the note that links to them
+   - *Same folder as current file* — moves attachments to the same folder as the note that links to them
+   - *Custom folder within same folder as current file* — creates a relative folder such as `_files` beside each linking note (for example `02 - Journals/August/_files`)
    - *Separate folder* — uses a configured folder name (e.g. `attachments`)
 3. Optionally choose **Sort into subfolders by** (none, date, file type, or custom pattern)
 4. Run **"Organize attachments"** from the Command Palette (`Ctrl/Cmd+P`)
@@ -88,8 +90,8 @@ A comprehensive Obsidian plugin that organizes and manages attachments, renames 
    - *OpenAI* — save your [API key](https://platform.openai.com/api-keys) as a secret and set a vision-capable model
    - *Anthropic* — save your [API key](https://console.anthropic.com/settings/keys) as a secret and set a Claude model
    - *Google Gemini* — save your [API key](https://makersuite.google.com/app/apikey) as a secret and pick a model
-4. Set the **OCR watch folder**: a specific folder, Obsidian's attachment folder, or Vaultkeeper's organize destination
-5. Set the **OCR output folder**: a specific folder, the source file's folder, Obsidian's attachment folder, or Vaultkeeper's organize destination
+4. Set the **OCR watch folder**: a specific folder, every folder with a specific name (for example every `_files` folder), Obsidian's attachment folder, or Vaultkeeper's organize destination
+5. Set the **OCR output folder**: **Sibling folder next to watched folder** (recommended for `_files` → `_ocr`), a specific folder, the source file's folder, Obsidian's attachment folder, or Vaultkeeper's organize destination
 
 ##### Self-hosted example (Ollama)
 
@@ -106,8 +108,9 @@ Then set **Custom server base URL** to `http://localhost:11434/v1` and **Custom 
 #### Commands
 | Command | Description |
 |---|---|
-| `OCR: Process watch folder` | Batch-process all unprocessed files in the watch folder |
-| `OCR: Reprocess all files (force update)` | Re-OCR every file even if a note already exists |
+| `OCR: Process all files (new + existing)` | OCR every compatible file in the watch scope, overwriting existing OCR notes |
+| `OCR: Process new files only` | OCR only files that do not already have an OCR note |
+| `OCR: Re-process existing files` | Re-OCR only files that already have an OCR note |
 | `OCR: Process current file` | OCR the file currently open in the editor |
 | `OCR: Pick attachment to process` | Choose any file in the vault to OCR |
 | `OCR: Stop processing` | Halt batch processing after the current file finishes |
@@ -203,12 +206,14 @@ Available tokens for paste rename patterns:
 | Custom model | Vision-capable model name as your server reports it |
 | Custom API key | Optional — leave unset for servers that need no auth |
 | Custom request timeout | Seconds to wait before giving up (30–1800) |
-| Test custom server | Check the server responds and lists your model |
+| Test connection | Prominent first OCR action for checking the custom server and selected model |
 | OpenAI / Anthropic / Gemini API key | Stored via Obsidian's secret storage, never in plain settings |
 | OpenAI / Anthropic / Gemini model | Model used by the selected provider |
-| OCR watch folder | A specific folder, Obsidian's attachment folder, or Vaultkeeper's organize destination |
+| OCR watch folder | A specific folder, any folder with a specific name, Obsidian's attachment folder, or Vaultkeeper's organize destination |
 | Watch folder path | The folder to monitor, when *A specific folder* is selected. Empty = whole vault. |
-| OCR output folder | A specific folder, the source file's folder, Obsidian's attachment folder, or Vaultkeeper's organize destination |
+| Watch folder name | Exact folder name to monitor everywhere in the vault, e.g. `_files` |
+| OCR output folder | Sibling folder next to the watched folder, a specific folder, the source file's folder, Obsidian's attachment folder, or Vaultkeeper's organize destination |
+| Sibling OCR folder name | Folder name used by sibling output mode; defaults to `_ocr` and preserves nested paths below `_files` |
 | Output folder path | The folder to write notes to, when *A specific folder* is selected |
 | Output subfolder | Subfolder appended to the resolved output location. Empty = write directly there. |
 
