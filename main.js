@@ -454,6 +454,11 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                         render: (setting) => {
                             setting.setName('Resolved watch folder')
                                 .setDesc(this.plugin.getOcrWatchFolder() || '(vault root)');
+                            // This value is derived from other controls rather than
+                            // directly editable. Keep its preview current when those
+                            // controls change without requiring the settings tab to be
+                            // closed and reopened.
+                            this.resolvedWatchFolderDescEl = setting.descEl;
                         }
                     },
                     {
@@ -665,9 +670,29 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
         return this.plugin.settings[key];
     }
 
-    setControlValue(key, value) {
+    async setControlValue(key, value) {
         this.plugin.settings[key] = value;
-        return this.plugin.saveSettings();
+        await this.plugin.saveSettings();
+
+        // The generic settings renderer does not redraw dependent descriptions
+        // after a control changes. In particular, switching Vaultkeeper's
+        // destination to "Custom folder within same folder as current file"
+        // must immediately change the OCR preview from the prior attachment
+        // path to the configured relative folder (normally `_files`).
+        if ([
+            'organizationMode',
+            'sameLocationSubfolderName',
+            'separateFolderName',
+            'autoOrganizeMode',
+            'customPattern',
+            'ocrWatchFolderMode',
+            'ocrWatchFolder',
+            'ocrWatchFolderName',
+        ].includes(key) && this.resolvedWatchFolderDescEl) {
+            this.resolvedWatchFolderDescEl.setText(
+                this.plugin.getOcrWatchFolder() || '(vault root)'
+            );
+        }
     }
 
     createAccordionSection(containerEl, title, contentCallback) {
