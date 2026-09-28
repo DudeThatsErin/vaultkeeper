@@ -10,7 +10,7 @@ A comprehensive Obsidian plugin that organizes and manages attachments, renames 
 - **Flexible destination**: Move attachments using Obsidian's built-in setting, same folder as the linking note, or a separate named folder
 - **Subfolder sorting**: Sort into subfolders by date, file type, or a custom pattern using tokens like `{{year}}`, `{{month}}`, `{{day}}`, `{{type}}`, `{{filename}}`
 - **Configurable extensions**: Define exactly which file types count as attachments
-- **Ignore rules**: Skip specified folders during organizing or purging
+- **Ignore rules**: Skip specified folders during organizing, purging, or paste renaming
 - **Empty folder cleanup**: Folders left empty after organizing are automatically deleted
 - **Auto-organize**: Run on startup and/or on a repeating interval
 
@@ -160,7 +160,7 @@ Images: PNG, JPG, JPEG, WEBP, BMP, GIF, HEIC, HEIF — Documents: PDF
 | Setting | Description |
 |---|---|
 | Attachment extensions | Comma-separated list of extensions treated as attachments |
-| Ignore folders | Comma-separated folder paths to skip during organizing or purging |
+| Ignore folders | Comma-separated folder paths to skip during organizing, purging, and paste renaming |
 
 ### Organization Settings
 | Setting | Description |

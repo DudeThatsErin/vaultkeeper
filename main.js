@@ -110,7 +110,7 @@ class AttachmentOrganizerSettingTab extends PluginSettingTab {
                     },
                     {
                         name: 'Ignore folders',
-                        desc: 'Comma-separated folder paths to skip when organizing or purging',
+                        desc: 'Comma-separated folder paths to skip when organizing, purging, or renaming pasted files',
                         control: { type: 'text', key: 'ignoreFolders', placeholder: 'folder1,folder2/subfolder' }
                     },
                 ],
@@ -1122,6 +1122,17 @@ module.exports = class AttachmentOrganizer extends Plugin {
     async handlePastedFile(file) {
         const mode = this.settings.pasteRenameMode;
         if (mode === 'none') return;
+
+        // Ignore-folder rules also apply to pasted/dropped attachments. Check
+        // before scheduling a rename so "ask" modes never open their modal.
+        const filePath = file.path.replace(/^\/+/, '');
+        const ignoreFolders = this.settings.ignoreFolders
+            .split(',')
+            .map(folder => folder.trim().replace(/^\/+|\/+$/g, ''))
+            .filter(Boolean);
+        if (ignoreFolders.some(folder => filePath === folder || filePath.startsWith(`${folder}/`))) {
+            return;
+        }
 
         const attachmentExtensions = this.settings.attachmentExtensions
             .split(',').map(e => e.trim().toLowerCase());
